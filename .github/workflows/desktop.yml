@@ -149,7 +149,9 @@ jobs:
           set -euo pipefail
           mkdir -p release-assets
           while IFS= read -r -d '' asset; do
-            cp "$asset" release-assets/
+            asset_name="$(basename "$asset")"
+            release_name="${asset_name// /.}"
+            cp "$asset" "release-assets/$release_name"
           done < <(find downloaded -type f \( -name '*.dmg' -o -name '*.msi' -o -name '*.exe' -o -name '*.spdx.json' \) -print0)
           test "$(find release-assets -type f | wc -l)" -ge 4
           (cd release-assets && sha256sum -- * > SHA256SUMS.txt)
