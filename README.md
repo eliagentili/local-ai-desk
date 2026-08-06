@@ -1,8 +1,14 @@
-# Local AI Desk 2
+<p align="center">
+  <img src="assets/local-ai-desk-icon.svg" width="104" alt="Icona di Local AI Desk">
+</p>
 
-[![Desktop CI](https://github.com/eliagentili/local-ai-desk/actions/workflows/desktop.yml/badge.svg)](https://github.com/eliagentili/local-ai-desk/actions/workflows/desktop.yml)
-[![Security](https://github.com/eliagentili/local-ai-desk/actions/workflows/security.yml/badge.svg)](https://github.com/eliagentili/local-ai-desk/actions/workflows/security.yml)
-[![License: AGPL v3+](https://img.shields.io/badge/license-AGPL--3.0--or--later-0a1f29.svg)](LICENSE)
+<h1 align="center">Local AI Desk</h1>
+
+<p align="center">
+  <strong>Dal file al risultato. Senza lasciare il tuo computer.</strong><br>
+  Un solo workspace open source per documenti, OCR, traduzione PDF,<br>
+  trascrizione e protezione dei dati — su macOS e Windows.
+</p>
 
 <p align="center">
   <a href="https://github.com/eliagentili/local-ai-desk/releases/latest/download/Local-AI-Desk-macOS-Apple-Silicon.dmg"><img alt="Scarica per macOS" src="https://img.shields.io/badge/Scarica_per_macOS-Apple_Silicon-000000?style=for-the-badge&amp;logo=apple&amp;logoColor=white"></a>
@@ -10,79 +16,123 @@
 </p>
 
 <p align="center">
-  macOS 14+ · Windows 10/11 x64 ·
-  <a href="https://github.com/eliagentili/local-ai-desk/releases/latest">Note dell'ultima versione</a> ·
-  <a href="https://github.com/eliagentili/local-ai-desk/releases/latest/download/SHA256SUMS.txt">Checksum SHA-256</a>
+  macOS 14+ · Windows 10/11 x64 · Gratis e open source · Nessun account
 </p>
 
-Local AI Desk 2 è il nuovo workspace desktop, local-first e open source per
-documenti, PDF, immagini, audio e video. È progettato per macOS Apple Silicon e
-Windows x64, con dati persistenti sul dispositivo e motori installabili a
-moduli.
+<p align="center">
+  <a href="https://github.com/eliagentili/local-ai-desk/actions/workflows/desktop.yml"><img alt="Desktop CI" src="https://github.com/eliagentili/local-ai-desk/actions/workflows/desktop.yml/badge.svg"></a>
+  <a href="https://github.com/eliagentili/local-ai-desk/actions/workflows/security.yml"><img alt="Security" src="https://github.com/eliagentili/local-ai-desk/actions/workflows/security.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="Licenza AGPL v3+" src="https://img.shields.io/badge/license-AGPL--3.0--or--later-0a1f29.svg"></a>
+</p>
 
-La prima release pubblica è una **beta**: il nucleo locale è utilizzabile, ma gli
-installer non sono ancora firmati con certificati Apple e Microsoft. Leggi i
-[limiti della beta](#download-e-limiti-della-beta) prima di installarla.
+![Panoramica di Local AI Desk su desktop](docs/screenshots/f1-installed-window.png)
 
-![Home di Local AI Desk 2](docs/screenshots/f1-installed-window.png)
+## L'AI locale, finalmente semplice
 
-![Coda con risultato completato](docs/screenshots/f1-activity-completed.png)
+Non dovresti conoscere modelli, dipendenze o comandi da terminale per lavorare
+in privato. Scegli il risultato; Local AI Desk instrada il file verso il motore
+locale adatto, mostra ogni fase e raccoglie gli output.
 
-## Stato della versione 0.3 beta
+| Privato per progetto | Un flusso, molti motori | File grandi davvero |
+| --- | --- | --- |
+| Elaborazione sul dispositivo, nessun upload esterno e nessun token AI. | Auto, OCR, traduzione, trascrizione e Privacy Shield nella stessa interfaccia. | Streaming su disco, batch paralleli e nessun limite artificiale di 500 MB. |
 
-- shell desktop nativa con Tauri 2 e React 19;
-- libreria SQLite persistente nel contenitore dell'app;
-- importazione multipla tramite selettore nativo macOS/Windows;
-- nessun limite artificiale alla dimensione dei file;
-- hash BLAKE3 in streaming per deduplicare senza caricare file enormi in RAM;
-- Studio guidato per Auto, traduzione PDF, OCR, trascrizione e Privacy Shield;
-- coda persistente con scheduler globale fino a tre lavori concorrenti;
-- upload in streaming senza limite artificiale a 500 MB;
-- progresso reale quando esposto dal motore e fase indeterminata negli altri casi;
-- annullamento per lavoro o per l’intero batch;
-- risultati salvati atomicamente e ZIP finale con manifest JSON;
-- adapter locale verso i sette motori già installati, su `127.0.0.1`;
-- bootstrap dei motori in background, senza finestre Terminal o PowerShell;
-- codice, modelli e cache separati per funzionare anche sotto `Program Files`;
-- rami nativi per Finder ed Esplora file, process group e annullamento;
-- pacchetti macOS `.app`/`.dmg` e Windows `.exe`/`.msi` nella CI;
-- CSP restrittiva e un solo permesso frontend: apertura del selettore file;
-- interfaccia accessibile, responsive, chiara anche in dark mode.
+## Trascina. Scegli. Ottieni.
 
-Pausa/ripresa, retry, notifiche, preview/editor, workflow e gestione autonoma dei
-model pack restano tracciati nella [roadmap](docs/ROADMAP.md) e non vengono
-presentati come già completi nell’interfaccia.
+1. **Trascina uno o più file.** Il Drop rapido non li aggiunge alla Libreria e
+   non calcola hash inutili, anche se sono video da molti GB.
+2. **Scegli il risultato.** Auto riconosce il percorso di estrazione; puoi anche
+   richiedere esplicitamente traduzione, OCR, trascrizione o protezione dati.
+3. **Segui il lavoro.** Progresso, fase, concorrenza e annullamento sono sempre
+   visibili. Al termine apri il risultato o scarica l'intero batch in uno ZIP.
 
-## Download e limiti della beta
+Le copie usate per il trasferimento locale vengono eliminate automaticamente al
+termine, in caso di errore e dopo un annullamento. Gli originali non vengono mai
+modificati. Rimangono soltanto i risultati che hai scelto di creare.
 
-Usa i pulsanti in cima alla pagina oppure questi link diretti, che puntano
-sempre all'ultima versione pubblicata:
+![Drop rapido nello Studio: il file è temporaneo e fuori dalla Libreria](docs/screenshots/f1-studio-quick-drop.png)
+
+## Cinque obiettivi, una sola scrivania
+
+| Obiettivo | Cosa ottieni | Motore locale |
+| --- | --- | --- |
+| **Estrai con Auto** | Markdown o testo da PDF, Office e molti altri formati | Router locale + MarkItDown / OCR |
+| **Traduci PDF** | PDF tradotto o bilingue con layout, immagini e formule | PDFMathTranslate 2 + TranslateGemma |
+| **Forza OCR** | Markdown, testo o JSON da scansioni e immagini | PaddleOCR / GLM-OCR |
+| **Trascrivi** | Testo, sottotitoli SRT o JSON da audio e video | Faster Whisper |
+| **Proteggi dati** | Testo mascherato o JSON con i rilevamenti | Presidio + regole italiane |
+
+![Attività completata con risultato locale](docs/screenshots/f1-activity-completed.png)
+
+## Drop rapido o Libreria? Decidi tu
+
+Il **Drop rapido** è il percorso predefinito per un lavoro usa-e-getta: la
+sorgente resta fuori dal database e sparisce dallo Studio quando il batch parte.
+
+La **Libreria** è opzionale e serve quando vuoi ritrovare una fonte nel tempo.
+Conserva solo percorso, metadati e hash BLAKE3: non crea una seconda copia del
+file. Puoi rimuovere il riferimento in qualsiasi momento senza cancellare
+l'originale o i risultati.
+
+## Costruita per essere affidabile
+
+- app desktop nativa con Tauri 2 e React 19;
+- coda persistente e scheduler fino a tre lavori concorrenti;
+- importazione e drop multipli tramite controlli nativi macOS/Windows;
+- upload in streaming e hash BLAKE3 incrementale, senza caricare file enormi in RAM;
+- avanzamento reale quando il motore lo espone e stato onesto negli altri casi;
+- annullamento per singolo lavoro o per tutto il batch;
+- risultati atomici e ZIP con manifest JSON;
+- runtime e motori in background, senza finestre Terminal o PowerShell;
+- dati, modelli e cache nel profilo dell'utente;
+- CSP restrittiva, CI multipiattaforma, CodeQL, SBOM e checksum di release;
+- interfaccia responsive, utilizzabile da tastiera e rispettosa del movimento ridotto.
+
+Pausa/ripresa, retry, notifiche, preview/editor e workflow visuali sono nella
+[roadmap](docs/ROADMAP.md). Le funzioni non complete non vengono presentate come
+se lo fossero.
+
+## Download della beta
+
+I link puntano sempre all'ultima versione pubblicata:
 
 - [macOS 14+ Apple Silicon — DMG](https://github.com/eliagentili/local-ai-desk/releases/latest/download/Local-AI-Desk-macOS-Apple-Silicon.dmg)
 - [Windows 10/11 x64 — installer EXE](https://github.com/eliagentili/local-ai-desk/releases/latest/download/Local-AI-Desk-Windows-x64-Setup.exe)
 - [Windows 10/11 x64 — pacchetto MSI](https://github.com/eliagentili/local-ai-desk/releases/latest/download/Local-AI-Desk-Windows-x64.msi)
-- [Tutte le release e note di versione](https://github.com/eliagentili/local-ai-desk/releases)
+- [Note, versioni precedenti e altri asset](https://github.com/eliagentili/local-ai-desk/releases)
+- [Checksum SHA-256](https://github.com/eliagentili/local-ai-desk/releases/latest/download/SHA256SUMS.txt)
 
-Ogni release contiene installer, SBOM SPDX e `SHA256SUMS.txt`. Verifica il
-checksum prima di aprire il file. In questa beta:
+La prima release pubblica è una **beta**. Ogni release contiene installer, SBOM
+SPDX e checksum. Prima di installare considera questi limiti:
 
 - macOS usa una firma ad-hoc e può richiedere l'autorizzazione in **Privacy e sicurezza**;
-- Windows può mostrare SmartScreen perché l'installer non ha ancora una firma Authenticode;
-- il primo setup dei motori può superare 20 GB e richiede una connessione Internet;
-- i pesi non sono inclusi negli installer e conservano le licenze dei produttori;
-- prima di usare file non fidati leggi [SECURITY.md](SECURITY.md).
+- Windows può mostrare SmartScreen perché manca ancora una firma Authenticode;
+- il primo setup dei motori può superare 20 GB e richiede Internet;
+- modelli e dipendenze non sono inclusi nell'installer e conservano le licenze originali;
+- per file non fidati consulta prima [SECURITY.md](SECURITY.md).
+
+## Runtime locale
+
+Al primo avvio, **Modelli → Installa motori** prepara l'ambiente nel profilo
+dell'utente e scarica i componenti da origini ufficiali. L'operazione prosegue
+in background. L'app usa soltanto il loopback `127.0.0.1` e termina alla chiusura
+i soli processi che ha avviato.
+
+- macOS: `~/Library/Application Support/it.local.localaidesk2/engine`
+- Windows: `%APPDATA%\it.local.localaidesk2\engine`
 
 ## Sviluppo
 
-Prerequisiti comuni: Node.js 20+ e Rust stable. Su macOS servono Xcode Command
-Line Tools; su Windows servono Microsoft C++ Build Tools e WebView2.
+Servono Node.js 20+, Rust stable e gli strumenti nativi della piattaforma:
+Xcode Command Line Tools su macOS; Microsoft C++ Build Tools e WebView2 su
+Windows.
 
 ```bash
 npm install
 npm run tauri dev
 ```
 
-Controlli prima di una build:
+Controlli locali:
 
 ```bash
 npm run build
@@ -98,53 +148,28 @@ Build macOS:
 npm run tauri build -- --bundles app,dmg
 ```
 
-Build Windows (da Windows):
+Build Windows, da Windows:
 
 ```powershell
 npm ci
 npm run tauri build -- --bundles nsis,msi
 ```
 
-Il workflow [desktop.yml](.github/workflows/desktop.yml) esegue test e build su
-runner nativi e pubblica come artifact entrambe le famiglie di installer. Non è
-necessario né consigliato tentare di produrre un MSI da macOS.
-
-## Runtime dei motori
-
-Il codice Python dei motori è incluso nel bundle. Al primo avvio, **Motori →
-Installa motori** crea l'ambiente nel profilo dell'utente e scarica solo da
-origini ufficiali i componenti e modelli necessari. È un'operazione una tantum,
-può superare 20 GB e continua in background senza aprire un terminale.
-
-- macOS: `~/Library/Application Support/it.local.localaidesk2/engine`
-- Windows: `%APPDATA%\it.local.localaidesk2\engine`
-
-L'app prova ad avviare automaticamente backend e Ollama; alla chiusura termina
-solo i processi che ha avviato lei. Un runtime già attivo sul loopback viene
-riutilizzato senza duplicarlo.
+Il workflow [desktop.yml](.github/workflows/desktop.yml) ripete test e build su
+runner nativi per entrambe le piattaforme.
 
 ## Documentazione
 
 - [Visione di prodotto](docs/PRODUCT.md)
-- [Architettura](docs/ARCHITECTURE.md)
-- [Ricerca tecnica e scelte](docs/RESEARCH.md)
+- [Architettura e ciclo di vita dei dati](docs/ARCHITECTURE.md)
+- [Ricerca tecnica e scelte dei motori](docs/RESEARCH.md)
 - [Roadmap](docs/ROADMAP.md)
-- [Licenze e distribuzione](docs/LICENSING.md)
-- [Sicurezza](SECURITY.md)
-- [Privacy](PRIVACY.md)
-- [Avvisi di terze parti](THIRD_PARTY_NOTICES.md)
+- [Sicurezza](SECURITY.md) e [privacy](PRIVACY.md)
+- [Licenze di terze parti](THIRD_PARTY_NOTICES.md)
 - [Come contribuire](CONTRIBUTING.md)
-- [Checklist di release](docs/RELEASE_CHECKLIST.md)
-
-## Dati locali
-
-Il percorso effettivo viene mostrato in **Impostazioni**. Durante lo sviluppo,
-Tauri usa il contenitore associato all'identificatore
-`it.local.localaidesk2`. Il database non contiene copie dei file: conserva
-metadati, hash, job e impostazioni. I file originali restano dove si trovano.
 
 ## Licenza
 
-Il codice di Local AI Desk è distribuito con licenza
+Local AI Desk è gratuito e distribuito con licenza
 [AGPL-3.0-or-later](LICENSE). Motori, modelli e dipendenze conservano le proprie
 condizioni, riepilogate in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -1,5 +1,6 @@
 import {
   ArrowRight,
+  FileUp,
   FileSearch,
   Languages,
   Mic2,
@@ -12,10 +13,11 @@ import type { AppSnapshot, SectionId } from "../types";
 interface DashboardProps {
   snapshot: AppSnapshot;
   onImport: () => void;
+  onQuickPick: () => void;
   onNavigate: (section: SectionId) => void;
 }
 
-export function Dashboard({ snapshot, onImport, onNavigate }: DashboardProps) {
+export function Dashboard({ snapshot, onImport, onQuickPick, onNavigate }: DashboardProps) {
   const pendingJobs = snapshot.jobs.filter((job) =>
     ["queued", "preparing", "uploading", "running", "finalizing", "cancelling"].includes(
       job.status,
@@ -27,38 +29,41 @@ export function Dashboard({ snapshot, onImport, onNavigate }: DashboardProps) {
     <div className="view-stack dashboard-view">
       <section className="hero-panel">
         <div className="hero-copy">
-          <span className="eyebrow">Locale. Modulare. Tuo.</span>
+          <span className="eyebrow">Privato. Locale. Multipiattaforma.</span>
           <h2>
-            Il tuo studio AI.
+            Dal file al risultato.
             <br />
-            <span>Tutto sul tuo computer.</span>
+            <span>Senza lasciare il tuo computer.</span>
           </h2>
           <p>
-            Trasforma documenti, PDF, audio e video senza spedire i tuoi file
-            altrove. Scegli il risultato, crea un batch e seguine ogni fase.
+            Trascina documenti, PDF, audio o video. Local AI Desk sceglie il motore
+            giusto, lavora in locale e conserva solo ciò che vuoi tu.
           </p>
           <div className="hero-actions">
-            <button className="button button-primary" onClick={onImport} type="button">
-              Importa file
+            <button className="button button-primary" onClick={onQuickPick} type="button">
+              Elabora subito
               <ArrowRight size={17} />
             </button>
             <button
               className="button button-secondary"
-              onClick={() => onNavigate("library")}
+              onClick={onImport}
               type="button"
             >
-              Apri libreria
+              Aggiungi alla libreria
             </button>
           </div>
         </div>
-        <div className="hero-orbit" aria-hidden="true">
-          <div className="orbit orbit-large" />
-          <div className="orbit orbit-small" />
-          <div className="orbit-core">L/AI</div>
-          <span className="orbit-node node-one">PDF</span>
-          <span className="orbit-node node-two">OCR</span>
-          <span className="orbit-node node-three">A/V</span>
-        </div>
+        <button className="hero-drop-zone" onClick={onQuickPick} type="button">
+          <span className="hero-drop-icon"><FileUp size={28} /></span>
+          <span className="eyebrow">Drop rapido</span>
+          <strong>Trascina qui. Lavora. Fatto.</strong>
+          <small>Scegli anche più file: non vengono aggiunti alla Libreria.</small>
+          <span className="drop-benefits" aria-label="Vantaggi del drop rapido">
+            <span>Auto locale</span>
+            <span>Nessun duplicato</span>
+            <span>Pulizia automatica</span>
+          </span>
+        </button>
       </section>
 
       <section aria-labelledby="quick-actions-title">
@@ -67,15 +72,15 @@ export function Dashboard({ snapshot, onImport, onNavigate }: DashboardProps) {
             <span className="eyebrow">Parti da qui</span>
             <h3 id="quick-actions-title">Azioni rapide</h3>
           </div>
-          <span className="section-note">I workflow completi arriveranno a moduli</span>
+          <span className="section-note">Originali intatti · risultati sempre sotto controllo</span>
         </div>
         <div className="quick-grid">
           <QuickAction
             icon={<FileSearch size={22} />}
             title="Elabora un documento"
-            description="Importa PDF, Office o scansioni nella libreria privata."
+            description="Trascina PDF, Office o scansioni e lascia scegliere ad Auto."
             accent="lime"
-            onClick={onImport}
+            onClick={onQuickPick}
           />
           <QuickAction
             icon={<Languages size={22} />}
@@ -145,7 +150,7 @@ export function Dashboard({ snapshot, onImport, onNavigate }: DashboardProps) {
           ) : (
             <EmptyInline
               title="La libreria è vuota"
-              description="Importa uno o più file: non c’è un limite artificiale di 500 MB."
+              description="È opzionale: il Drop rapido elabora anche file di molti GB senza archiviarli."
             />
           )}
         </div>

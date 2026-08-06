@@ -101,6 +101,11 @@ export interface ImportReport {
   snapshot: AppSnapshot;
 }
 
+export interface QuickFilesReport {
+  files: LibraryItem[];
+  rejected: string[];
+}
+
 export type WorkflowIntent = "extract" | "translate" | "ocr" | "transcribe" | "privacy";
 
 export interface WorkflowOptions {

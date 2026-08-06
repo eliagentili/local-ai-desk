@@ -1,7 +1,8 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
-import { AlertCircle, CheckCircle2, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { AlertCircle, CheckCircle2, FileUp, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import "./App.css";
 import { ActivityView } from "./components/ActivityView";
@@ -18,6 +19,8 @@ import type {
   ExportReport,
   ImportReport,
   Job,
+  LibraryItem,
+  QuickFilesReport,
   SectionId,
   StartJobsReport,
   RuntimeStatus,
@@ -80,8 +83,40 @@ function App() {
   const [runtime, setRuntime] = useState<RuntimeStatus>(emptyRuntime);
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
+  const [inspecting, setInspecting] = useState(false);
+  const [quickItems, setQuickItems] = useState<LibraryItem[]>([]);
+  const [dropActive, setDropActive] = useState(false);
   const [starting, setStarting] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const inspectingRef = useRef(false);
+
+  const addQuickPaths = useCallback(async (paths: string[]) => {
+    if (!isTauri() || !paths.length || inspectingRef.current) return;
+    inspectingRef.current = true;
+    setInspecting(true);
+    setNotice(null);
+    try {
+      const report = await invoke<QuickFilesReport>("inspect_quick_files", { paths });
+      setQuickItems((current) => {
+        const next = new Map(current.map((item) => [item.path, item]));
+        for (const item of report.files) next.set(item.path, next.get(item.path) ?? item);
+        return Array.from(next.values());
+      });
+      if (report.files.length) setActive("studio");
+      setNotice({
+        tone: report.rejected.length ? "error" : "success",
+        title: report.rejected.length ? "Selezione parziale" : "File pronti, senza archiviarli",
+        detail: `${report.files.length} ${report.files.length === 1 ? "file temporaneo" : "file temporanei"}${
+          report.rejected.length ? ` · ${report.rejected.length} non accettati` : " · pulizia automatica dopo il lavoro"
+        }`,
+      });
+    } catch (error) {
+      setNotice({ tone: "error", title: "File non disponibili", detail: String(error) });
+    } finally {
+      inspectingRef.current = false;
+      setInspecting(false);
+    }
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -126,6 +161,30 @@ function App() {
       mounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type === "drop") {
+          setDropActive(false);
+          void addQuickPaths(event.payload.paths);
+        } else {
+          setDropActive(event.payload.type === "enter" || event.payload.type === "over");
+        }
+      })
+      .then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [addQuickPaths]);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -207,13 +266,40 @@ function App() {
     }
   }
 
-  async function handleStart(itemIds: string[], options: WorkflowOptions) {
+  async function handleQuickPick() {
+    if (!isTauri() || inspectingRef.current) return;
+    try {
+      const selection = await open({
+        multiple: true,
+        directory: false,
+        title: "Elabora senza aggiungere alla libreria",
+      });
+      const paths = typeof selection === "string" ? [selection] : selection ?? [];
+      await addQuickPaths(paths);
+    } catch (error) {
+      setNotice({ tone: "error", title: "Selezione non riuscita", detail: String(error) });
+    }
+  }
+
+  async function handleStart(
+    itemIds: string[],
+    quickPaths: string[],
+    options: WorkflowOptions,
+  ) {
     if (!isTauri() || starting) return;
     setStarting(true);
     setNotice(null);
     try {
-      const report = await invoke<StartJobsReport>("start_jobs", { itemIds, options });
+      const report = await invoke<StartJobsReport>("start_jobs", {
+        itemIds,
+        quickPaths,
+        options,
+      });
       setSnapshot(report.snapshot);
+      if (quickPaths.length) {
+        const startedPaths = new Set(quickPaths);
+        setQuickItems((current) => current.filter((item) => !startedPaths.has(item.path)));
+      }
       setNotice({
         tone: "success",
         title: "Batch avviato",
@@ -224,6 +310,20 @@ function App() {
       setNotice({ tone: "error", title: "Avvio non riuscito", detail: String(error) });
     } finally {
       setStarting(false);
+    }
+  }
+
+  async function handleRemoveLibraryItem(itemId: string) {
+    try {
+      const current = await invoke<AppSnapshot>("remove_library_item", { itemId });
+      setSnapshot(current);
+      setNotice({
+        tone: "success",
+        title: "Rimosso dalla libreria",
+        detail: "Il riferimento è stato eliminato. Il file originale e i risultati restano intatti.",
+      });
+    } catch (error) {
+      setNotice({ tone: "error", title: "Rimozione non riuscita", detail: String(error) });
     }
   }
 
@@ -299,12 +399,19 @@ function App() {
         <Dashboard
           onImport={() => void handleImport()}
           onNavigate={setActive}
+          onQuickPick={() => void handleQuickPick()}
           snapshot={snapshot}
         />
       );
     }
     if (active === "library") {
-      return <LibraryView items={snapshot.library} onImport={() => void handleImport()} />;
+      return (
+        <LibraryView
+          items={snapshot.library}
+          onImport={() => void handleImport()}
+          onRemove={(itemId) => void handleRemoveLibraryItem(itemId)}
+        />
+      );
     }
     if (active === "studio") {
       return (
@@ -312,7 +419,12 @@ function App() {
           bridge={snapshot.bridge}
           items={snapshot.library}
           onImport={() => void handleImport()}
-          onStart={(itemIds, options) => void handleStart(itemIds, options)}
+          onQuickPick={() => void handleQuickPick()}
+          onClearQuick={() => setQuickItems([])}
+          onStart={(itemIds, quickPaths, options) =>
+            void handleStart(itemIds, quickPaths, options)
+          }
+          quickItems={quickItems}
           starting={starting}
         />
       );
@@ -383,6 +495,16 @@ function App() {
           </button>
         </div>
       ) : null}
+      {dropActive ? (
+        <div className="drop-overlay" role="status">
+          <div>
+            <FileUp size={34} />
+            <strong>Rilascia per elaborare</strong>
+            <span>Niente Libreria · originali intatti · pulizia automatica</span>
+          </div>
+        </div>
+      ) : null}
+      {inspecting ? <span className="sr-only" role="status">Lettura dei file…</span> : null}
     </div>
   );
 }

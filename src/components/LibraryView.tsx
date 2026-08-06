@@ -1,4 +1,4 @@
-import { File, Filter, Search } from "lucide-react";
+import { File, Filter, Search, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { formatBytes, formatDate } from "../lib/format";
@@ -7,9 +7,10 @@ import type { LibraryItem } from "../types";
 interface LibraryViewProps {
   items: LibraryItem[];
   onImport: () => void;
+  onRemove: (itemId: string) => void;
 }
 
-export function LibraryView({ items, onImport }: LibraryViewProps) {
+export function LibraryView({ items, onImport, onRemove }: LibraryViewProps) {
   const [query, setQuery] = useState("");
   const normalized = query.trim().toLocaleLowerCase("it");
   const visibleItems = normalized
@@ -23,10 +24,10 @@ export function LibraryView({ items, onImport }: LibraryViewProps) {
       <section className="view-intro">
         <div>
           <span className="eyebrow">Archivio locale</span>
-          <h2>I tuoi file, una volta sola.</h2>
+          <h2>Un indice, non un duplicato.</h2>
           <p>
-            Ogni elemento viene indicizzato nel database locale e deduplicato in
-            streaming. Anche i file molto grandi non vengono caricati in memoria.
+            La Libreria conserva soltanto percorso, metadati e hash: non copia gli
+            originali. Per un lavoro usa-e-getta, trascina invece il file nello Studio.
           </p>
         </div>
         <button className="button button-primary" onClick={onImport} type="button">
@@ -62,6 +63,7 @@ export function LibraryView({ items, onImport }: LibraryViewProps) {
                   <th>Dimensione</th>
                   <th>Aggiunto</th>
                   <th>Stato</th>
+                  <th><span className="sr-only">Azioni</span></th>
                 </tr>
               </thead>
               <tbody>
@@ -83,6 +85,17 @@ export function LibraryView({ items, onImport }: LibraryViewProps) {
                     <td>{formatDate(item.addedAt)}</td>
                     <td>
                       <span className="status-label">Pronto</span>
+                    </td>
+                    <td className="table-actions">
+                      <button
+                        aria-label={`Rimuovi ${item.name} dalla libreria`}
+                        className="icon-button danger-icon-button"
+                        onClick={() => onRemove(item.id)}
+                        title="Rimuove solo il riferimento, non il file originale"
+                        type="button"
+                      >
+                        <Trash2 size={14} />
+                      </button>
                     </td>
                   </tr>
                 ))}

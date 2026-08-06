@@ -55,6 +55,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap_snapshot,
             commands::import_files,
+            commands::inspect_quick_files,
+            commands::remove_library_item,
             commands::refresh_snapshot,
             commands::get_bridge_status,
             commands::get_runtime_status,

@@ -424,6 +424,79 @@ input:focus-visible {
   line-height: 1.55;
 }
 
+.hero-drop-zone {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  margin: 30px 30px 30px 8px;
+  padding: 28px 24px;
+  color: var(--ink);
+  text-align: center;
+  border: 1.5px dashed rgba(91, 133, 13, 0.42);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 50% 30%, rgba(183, 244, 59, 0.2), transparent 54%),
+    rgba(255, 255, 255, 0.45);
+  cursor: pointer;
+  transition:
+    transform 170ms ease,
+    border-color 170ms ease,
+    background-color 170ms ease;
+}
+
+.hero-drop-zone:hover {
+  border-color: var(--lime-dark);
+  background-color: rgba(255, 255, 255, 0.68);
+  transform: translateY(-2px);
+}
+
+.hero-drop-icon {
+  display: grid;
+  width: 54px;
+  height: 54px;
+  place-items: center;
+  margin-bottom: 4px;
+  color: var(--lime);
+  border-radius: 17px;
+  background: var(--ink);
+  box-shadow: 0 14px 34px rgba(13, 29, 34, 0.16);
+}
+
+.hero-drop-zone strong {
+  font-size: 17px;
+  letter-spacing: -0.035em;
+}
+
+.hero-drop-zone small {
+  max-width: 270px;
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 1.5;
+}
+
+.drop-benefits {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.drop-benefits span {
+  padding: 5px 7px;
+  color: var(--ink-soft);
+  font-size: 7.5px;
+  font-weight: 740;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.55);
+}
+
 .hero-actions {
   display: flex;
   gap: 10px;
@@ -961,6 +1034,30 @@ tbody tr:last-child td {
   white-space: nowrap;
 }
 
+.table-actions {
+  width: 48px;
+  text-align: right;
+}
+
+.icon-button {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  padding: 0;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.38);
+  cursor: pointer;
+}
+
+.danger-icon-button:hover {
+  color: #a53d31;
+  border-color: rgba(183, 64, 50, 0.3);
+  background: rgba(255, 125, 105, 0.1);
+}
+
 .table-name strong {
   color: var(--ink);
   font-size: 11px;
@@ -1271,6 +1368,59 @@ tbody tr:last-child td {
   padding: 17px 18px 13px;
 }
 
+.source-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.studio-drop-zone {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin: 0 18px 11px;
+  padding: 10px 12px;
+  color: var(--ink);
+  text-align: left;
+  border: 1px dashed rgba(91, 133, 13, 0.42);
+  border-radius: 11px;
+  background: rgba(183, 244, 59, 0.07);
+  cursor: pointer;
+}
+
+.studio-drop-zone:hover,
+.studio-drop-zone[data-filled="true"] {
+  border-color: var(--lime-dark);
+  background: rgba(183, 244, 59, 0.13);
+}
+
+.studio-drop-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  color: #638b15;
+  border-radius: 10px;
+  background: rgba(183, 244, 59, 0.19);
+}
+
+.studio-drop-zone strong,
+.studio-drop-zone small {
+  display: block;
+}
+
+.studio-drop-zone strong {
+  font-size: 10.5px;
+}
+
+.studio-drop-zone small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.35;
+}
+
 .studio-search {
   width: auto;
   margin: 0 18px 12px;
@@ -1355,6 +1505,13 @@ tbody tr:last-child td {
   color: var(--muted);
   font-size: 10px;
   line-height: 1.45;
+}
+
+.studio-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
 }
 
 .workflow-config {
@@ -1728,6 +1885,42 @@ tbody tr:last-child td {
   cursor: pointer;
 }
 
+.drop-overlay {
+  position: fixed;
+  z-index: 100;
+  inset: 14px;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  border: 2px dashed var(--lime-dark);
+  border-radius: 24px;
+  background: rgba(13, 29, 34, 0.9);
+  box-shadow: inset 0 0 0 8px rgba(183, 244, 59, 0.08);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.drop-overlay > div {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 9px;
+  padding: 34px;
+  color: var(--lime);
+  text-align: center;
+}
+
+.drop-overlay strong {
+  color: #f5faf6;
+  font-size: 25px;
+  letter-spacing: -0.04em;
+}
+
+.drop-overlay span {
+  color: rgba(238, 244, 239, 0.65);
+  font-size: 10px;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -1816,6 +2009,10 @@ tbody tr:last-child td {
   .hero-copy {
     padding-left: 35px;
   }
+
+  .hero-drop-zone {
+    margin-right: 22px;
+  }
 }
 
 @media (max-width: 900px) {
@@ -1869,6 +2066,11 @@ tbody tr:last-child td {
 
   .hero-orbit {
     display: none;
+  }
+
+  .hero-drop-zone {
+    min-height: 220px;
+    margin: 0 28px 28px;
   }
 
   .metrics-grid {

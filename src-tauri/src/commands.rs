@@ -22,7 +22,7 @@ use crate::{
     engine_bridge,
     models::{
         AppSnapshot, BridgeStatus, EngineStatus, ExportReport, ImportReport, Job, JobSpec,
-        RuntimeStatus, StartJobsReport, SystemSnapshot, WorkflowOptions,
+        QuickFilesReport, RuntimeStatus, StartJobsReport, SystemSnapshot, WorkflowOptions,
     },
 };
 
@@ -605,6 +605,55 @@ fn validate_workflow(
     Ok(())
 }
 
+fn inspect_quick_paths(paths: Vec<String>) -> (Vec<crate::models::LibraryItem>, Vec<String>) {
+    let mut files = Vec::new();
+    let mut rejected = Vec::new();
+    let mut known_paths = HashSet::new();
+
+    for raw_path in paths {
+        let requested = PathBuf::from(&raw_path);
+        let canonical = match requested.canonicalize() {
+            Ok(path) if path.is_file() => path,
+            Ok(_) => {
+                rejected.push(format!("{raw_path}: non è un file"));
+                continue;
+            }
+            Err(error) => {
+                rejected.push(format!("{raw_path}: {error}"));
+                continue;
+            }
+        };
+        if !known_paths.insert(canonical.clone()) {
+            continue;
+        }
+        let metadata = match canonical.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                rejected.push(format!("{raw_path}: {error}"));
+                continue;
+            }
+        };
+        let name = canonical
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("File senza nome")
+            .to_string();
+        let now = Utc::now().to_rfc3339();
+        files.push(crate::models::LibraryItem {
+            id: format!("quick-{}", uuid::Uuid::new_v4()),
+            name,
+            path: canonical.to_string_lossy().into_owned(),
+            kind: kind_for(&canonical),
+            size_bytes: metadata.len(),
+            content_hash: String::new(),
+            status: "temporary".to_string(),
+            added_at: now.clone(),
+            updated_at: now,
+        });
+    }
+    (files, rejected)
+}
+
 #[tauri::command]
 pub async fn bootstrap_snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
     snapshot(state.database_path.clone(), state.data_dir.clone()).await
@@ -714,16 +763,50 @@ pub async fn import_files(
 }
 
 #[tauri::command]
+pub async fn inspect_quick_files(paths: Vec<String>) -> Result<QuickFilesReport, String> {
+    if paths.is_empty() {
+        return Err("Nessun file selezionato".to_string());
+    }
+    if paths.len() > 500 {
+        return Err("Seleziona al massimo 500 file per volta".to_string());
+    }
+    let (files, rejected) =
+        tauri::async_runtime::spawn_blocking(move || inspect_quick_paths(paths))
+            .await
+            .map_err(|error| format!("Lettura interrotta: {error}"))?;
+    Ok(QuickFilesReport { files, rejected })
+}
+
+#[tauri::command]
+pub async fn remove_library_item(
+    item_id: String,
+    state: State<'_, AppState>,
+) -> Result<AppSnapshot, String> {
+    let database_path = state.database_path.clone();
+    let removed = tauri::async_runtime::spawn_blocking(move || {
+        database::delete_library_item(&database_path, &item_id)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
+    if !removed {
+        return Err("Elemento della libreria non trovato".to_string());
+    }
+    snapshot(state.database_path.clone(), state.data_dir.clone()).await
+}
+
+#[tauri::command]
 pub async fn start_jobs(
     item_ids: Vec<String>,
+    quick_paths: Vec<String>,
     options: WorkflowOptions,
     state: State<'_, AppState>,
 ) -> Result<StartJobsReport, String> {
-    if item_ids.is_empty() {
-        return Err("Seleziona almeno un elemento della libreria".to_string());
+    if item_ids.is_empty() && quick_paths.is_empty() {
+        return Err("Seleziona almeno un file".to_string());
     }
-    if item_ids.len() > 500 {
-        return Err("Avvia al massimo 500 elementi per batch".to_string());
+    if item_ids.len().saturating_add(quick_paths.len()) > 500 {
+        return Err("Avvia al massimo 500 file per batch".to_string());
     }
     if !bridge_status().await.available {
         let _ = spawn_runtime_process(state.inner());
@@ -738,20 +821,36 @@ pub async fn start_jobs(
 
     let database_path = state.database_path.clone();
     let ids_for_query = item_ids.clone();
-    let items = tauri::async_runtime::spawn_blocking(move || {
+    let persistent_items = tauri::async_runtime::spawn_blocking(move || {
         database::library_items_by_ids(&database_path, &ids_for_query)
     })
     .await
     .map_err(|error| error.to_string())?
     .map_err(|error| format!("Elemento non trovato: {error}"))?;
-    validate_workflow(&items, &options)?;
+    let (quick_items, rejected) =
+        tauri::async_runtime::spawn_blocking(move || inspect_quick_paths(quick_paths))
+            .await
+            .map_err(|error| error.to_string())?;
+    if let Some(error) = rejected.first() {
+        return Err(format!("File rapido non disponibile: {error}"));
+    }
+    let mut items = Vec::with_capacity(persistent_items.len() + quick_items.len());
+    items.extend(
+        persistent_items
+            .into_iter()
+            .map(|item| (Some(item.id.clone()), item)),
+    );
+    items.extend(quick_items.into_iter().map(|item| (None, item)));
+    let workflow_items: Vec<_> = items.iter().map(|(_, item)| item.clone()).collect();
+    validate_workflow(&workflow_items, &options)?;
     let tool = resolve_tool(&options.intent)?.to_string();
     let batch_id = uuid::Uuid::new_v4().to_string();
     let specs: Vec<JobSpec> = items
         .into_iter()
-        .map(|item| JobSpec {
+        .map(|(library_item_id, item)| JobSpec {
             id: uuid::Uuid::new_v4().to_string(),
             batch_id: batch_id.clone(),
+            library_item_id,
             item,
             options: options.clone(),
             tool: tool.clone(),
@@ -1034,6 +1133,24 @@ mod tests {
     use crate::models::{LibraryItem, WorkflowOptions};
 
     #[test]
+    fn quick_files_are_inspected_without_hashing_or_persisting() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let source = temporary.path().join("video grande.mp4");
+        fs::write(&source, b"local-only").expect("test source");
+
+        let (files, rejected) = inspect_quick_paths(vec![
+            source.to_string_lossy().into_owned(),
+            source.to_string_lossy().into_owned(),
+        ]);
+
+        assert!(rejected.is_empty());
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].status, "temporary");
+        assert!(files[0].content_hash.is_empty());
+        assert_eq!(files[0].size_bytes, 10);
+    }
+
+    #[test]
     fn exports_completed_batch_with_manifest_and_unique_names() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let database_path = temporary.path().join("zip.sqlite3");
@@ -1048,6 +1165,7 @@ mod tests {
             .map(|id| JobSpec {
                 id: id.to_string(),
                 batch_id: "batch-zip".to_string(),
+                library_item_id: Some(format!("item-{id}")),
                 item: LibraryItem {
                     id: format!("item-{id}"),
                     name: format!("{id}.md"),

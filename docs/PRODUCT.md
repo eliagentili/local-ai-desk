@@ -38,6 +38,10 @@ senza dover conoscere modelli, dipendenze o terminale.
 - **Modelli:** pack installabili, dimensioni, compatibilità e aggiornamenti.
 - **Impostazioni:** privacy, rete, storage, risorse, diagnostica e aggiornamenti.
 
+Home e Studio espongono inoltre una corsia **Drop rapido**, distinta dalla
+Libreria: serve per elaborare e dimenticare una sorgente senza indicizzarla. La
+conservazione è una scelta esplicita, non un effetto collaterale dell'uso.
+
 ## Definizione di “Apple-grade”
 
 Non significa imitare l'aspetto di macOS. Significa ridurre le decisioni non

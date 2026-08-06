@@ -219,6 +219,11 @@ pub fn list_library(database_path: &Path) -> rusqlite::Result<Vec<LibraryItem>> 
     rows.collect()
 }
 
+pub fn delete_library_item(database_path: &Path, id: &str) -> rusqlite::Result<bool> {
+    let connection = connect(database_path)?;
+    Ok(connection.execute("DELETE FROM library_items WHERE id = ?1", params![id])? > 0)
+}
+
 pub fn library_items_by_ids(
     database_path: &Path,
     ids: &[String],
@@ -301,7 +306,7 @@ fn insert_job_in_transaction(
         params![
             spec.id,
             spec.batch_id,
-            spec.item.id,
+            spec.library_item_id,
             spec.item.name,
             spec.options.intent,
             spec.tool,
@@ -457,6 +462,7 @@ mod tests {
         let spec = JobSpec {
             id: "job-1".to_string(),
             batch_id: "batch-1".to_string(),
+            library_item_id: Some(library_item.id.clone()),
             item: library_item,
             options: WorkflowOptions::default(),
             tool: "auto".to_string(),
@@ -495,6 +501,46 @@ mod tests {
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].status, "completed");
         assert_eq!(jobs[0].engine.as_deref(), Some("test-engine"));
+        assert!(delete_library_item(&path, "item-1").expect("remove library reference"));
+        assert!(list_library(&path)
+            .expect("library after removal")
+            .is_empty());
+        assert_eq!(
+            list_jobs(&path).expect("job after source removal")[0].library_item_id,
+            None
+        );
+    }
+
+    #[test]
+    fn transient_jobs_do_not_create_library_records() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let path = temporary.path().join("transient.sqlite3");
+        initialize(&path).expect("schema");
+        let now = "2026-08-06T10:00:00Z".to_string();
+        let spec = JobSpec {
+            id: "quick-job".to_string(),
+            batch_id: "quick-batch".to_string(),
+            library_item_id: None,
+            item: LibraryItem {
+                id: "quick-source".to_string(),
+                name: "grande.mp4".to_string(),
+                path: "/tmp/grande.mp4".to_string(),
+                kind: "Video".to_string(),
+                size_bytes: 4_000_000_000,
+                content_hash: String::new(),
+                status: "temporary".to_string(),
+                added_at: now.clone(),
+                updated_at: now,
+            },
+            options: WorkflowOptions::default(),
+            tool: "auto".to_string(),
+        };
+
+        insert_job(&path, &spec).expect("transient job");
+        assert!(list_library(&path).expect("library").is_empty());
+        let job = list_jobs(&path).expect("jobs").remove(0);
+        assert_eq!(job.library_item_id, None);
+        assert_eq!(job.input_name, "grande.mp4");
     }
 
     #[test]
