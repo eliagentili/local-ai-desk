@@ -42,7 +42,7 @@ export function Sidebar({ active, jobCount, onNavigate }: SidebarProps) {
         </span>
         <span className="brand-copy">
           <strong>Local AI Desk</strong>
-          <small>Local workspace · 0.2</small>
+          <small>macOS + Windows · 0.3</small>
         </span>
       </div>
 

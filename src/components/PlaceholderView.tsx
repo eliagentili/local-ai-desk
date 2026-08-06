@@ -56,6 +56,9 @@ export function PlaceholderView({ section, snapshot, onNavigate }: PlaceholderVi
           <code>{snapshot.system.dataDirectory}</code>
           <div className="diagnostic-grid">
             <span>
+              Sistema <strong>{snapshot.system.platformLabel}</strong>
+            </span>
+            <span>
               Architettura <strong>{snapshot.system.architecture}</strong>
             </span>
             <span>

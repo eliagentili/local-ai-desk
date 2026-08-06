@@ -66,11 +66,25 @@ export interface BridgeStatus {
 }
 
 export interface SystemSnapshot {
+  operatingSystem: string;
+  platformLabel: string;
+  computeLabel: string;
   architecture: string;
   logicalCpus: number;
   totalMemoryBytes: number;
   availableMemoryBytes: number;
   dataDirectory: string;
+}
+
+export interface RuntimeStatus {
+  platform: string;
+  supported: boolean;
+  installed: boolean;
+  running: boolean;
+  installing: boolean;
+  dataDirectory: string;
+  logPath: string;
+  message: string;
 }
 
 export interface AppSnapshot {

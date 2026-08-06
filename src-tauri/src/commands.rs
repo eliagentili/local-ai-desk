@@ -3,7 +3,7 @@ use std::{
     fs::{self, File},
     io::{BufReader, Read, Write},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -22,7 +22,7 @@ use crate::{
     engine_bridge,
     models::{
         AppSnapshot, BridgeStatus, EngineStatus, ExportReport, ImportReport, Job, JobSpec,
-        StartJobsReport, SystemSnapshot, WorkflowOptions,
+        RuntimeStatus, StartJobsReport, SystemSnapshot, WorkflowOptions,
     },
 };
 
@@ -71,6 +71,17 @@ fn system_snapshot(data_dir: &Path) -> SystemSnapshot {
     let mut system = System::new();
     system.refresh_memory();
     SystemSnapshot {
+        operating_system: std::env::consts::OS.to_string(),
+        platform_label: match std::env::consts::OS {
+            "macos" => "macOS".to_string(),
+            "windows" => "Windows".to_string(),
+            other => other.to_string(),
+        },
+        compute_label: match (std::env::consts::OS, std::env::consts::ARCH) {
+            ("macos", "aarch64") => "Apple Silicon · Metal".to_string(),
+            ("windows", "x86_64") => "Windows · CPU/GPU locale".to_string(),
+            (_, architecture) => format!("CPU locale · {architecture}"),
+        },
         architecture: std::env::consts::ARCH.to_string(),
         logical_cpus: std::thread::available_parallelism()
             .map(usize::from)
@@ -79,6 +90,319 @@ fn system_snapshot(data_dir: &Path) -> SystemSnapshot {
         available_memory_bytes: system.available_memory(),
         data_directory: data_dir.to_string_lossy().into_owned(),
     }
+}
+
+fn runtime_python(engine_data_dir: &Path) -> PathBuf {
+    if cfg!(windows) {
+        engine_data_dir
+            .join(".venv")
+            .join("Scripts")
+            .join("python.exe")
+    } else {
+        engine_data_dir.join(".venv").join("bin").join("python")
+    }
+}
+
+fn process_is_running(process: &Arc<std::sync::Mutex<Option<std::process::Child>>>) -> bool {
+    let Ok(mut process) = process.lock() else {
+        return false;
+    };
+    let Some(child) = process.as_mut() else {
+        return false;
+    };
+    match child.try_wait() {
+        Ok(None) => true,
+        Ok(Some(_)) | Err(_) => {
+            *process = None;
+            false
+        }
+    }
+}
+
+fn install_process_is_running(state: &AppState) -> bool {
+    let result = {
+        let Ok(mut process) = state.installer_process.lock() else {
+            return false;
+        };
+        let Some(child) = process.as_mut() else {
+            return false;
+        };
+        match child.try_wait() {
+            Ok(None) => return true,
+            Ok(Some(status)) if status.success() => {
+                *process = None;
+                Some("Installazione completata; avvio dei motori in corso".to_string())
+            }
+            Ok(Some(status)) => {
+                *process = None;
+                let log = fs::read(state.engine_data_dir.join("install.log")).unwrap_or_default();
+                let start = log.len().saturating_sub(1_200);
+                let tail = String::from_utf8_lossy(&log[start..]);
+                let detail = tail
+                    .lines()
+                    .rev()
+                    .find(|line| !line.trim().is_empty())
+                    .unwrap_or("Consulta il log di installazione")
+                    .trim();
+                Some(format!("Installazione interrotta ({status}): {detail}"))
+            }
+            Err(error) => {
+                *process = None;
+                Some(format!("Stato installazione non leggibile: {error}"))
+            }
+        }
+    };
+    if let Some(result) = result {
+        if let Ok(mut last_result) = state.last_install_result.lock() {
+            *last_result = Some(result);
+        }
+    }
+    false
+}
+
+fn loopback_runtime_available() -> bool {
+    let address = "127.0.0.1:8787".parse().expect("static socket address");
+    std::net::TcpStream::connect_timeout(&address, Duration::from_millis(120)).is_ok()
+}
+
+fn loopback_ollama_available() -> bool {
+    let address = "127.0.0.1:11434".parse().expect("static socket address");
+    std::net::TcpStream::connect_timeout(&address, Duration::from_millis(120)).is_ok()
+}
+
+fn spawn_ollama_process(state: &AppState) -> Result<(), String> {
+    if loopback_ollama_available() || process_is_running(&state.ollama_process) {
+        return Ok(());
+    }
+    let executable = if cfg!(windows) {
+        state
+            .engine_data_dir
+            .join("tools")
+            .join("ollama")
+            .join("ollama.exe")
+    } else {
+        state
+            .engine_data_dir
+            .join("tools")
+            .join("ollama")
+            .join("Ollama.app")
+            .join("Contents")
+            .join("Resources")
+            .join("ollama")
+    };
+    if !executable.is_file() {
+        return Ok(());
+    }
+    let models = state.engine_data_dir.join("models").join("ollama");
+    fs::create_dir_all(&models).map_err(|error| error.to_string())?;
+    let stdout = File::create(state.engine_data_dir.join("ollama.log"))
+        .map_err(|error| error.to_string())?;
+    let stderr = stdout.try_clone().map_err(|error| error.to_string())?;
+    let mut command = Command::new(executable);
+    command
+        .arg("serve")
+        .env("OLLAMA_MODELS", models)
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        command.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
+    }
+    let child = command
+        .spawn()
+        .map_err(|error| format!("Avvio di Ollama non riuscito: {error}"))?;
+    *state
+        .ollama_process
+        .lock()
+        .map_err(|_| "Stato di Ollama non disponibile".to_string())? = Some(child);
+    Ok(())
+}
+
+fn spawn_runtime_process(state: &AppState) -> Result<(), String> {
+    if loopback_runtime_available() || process_is_running(&state.runtime_process) {
+        return Ok(());
+    }
+    let python = runtime_python(&state.engine_data_dir);
+    if !python.is_file() {
+        return Err("Installa prima il runtime locale dalla schermata Motori".to_string());
+    }
+    spawn_ollama_process(state)?;
+    let backend = state
+        .engine_resource_dir
+        .join("backend")
+        .join("app")
+        .join("main.py");
+    if !backend.is_file() {
+        return Err("Il pacchetto dei motori non è presente nell’app".to_string());
+    }
+    fs::create_dir_all(&state.engine_data_dir).map_err(|error| error.to_string())?;
+    let log_path = state.engine_data_dir.join("runtime.log");
+    let stdout = File::create(&log_path).map_err(|error| error.to_string())?;
+    let stderr = stdout.try_clone().map_err(|error| error.to_string())?;
+    let mut command = Command::new(python);
+    command
+        .current_dir(&state.engine_resource_dir)
+        .env("LOCAL_AI_ENGINE_HOME", &state.engine_data_dir)
+        .env("PYTHONUTF8", "1")
+        .arg("-m")
+        .arg("uvicorn")
+        .arg("backend.app.main:app")
+        .arg("--host")
+        .arg("127.0.0.1")
+        .arg("--port")
+        .arg("8787")
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        command.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
+    }
+    let child = command
+        .spawn()
+        .map_err(|error| format!("Avvio del runtime non riuscito: {error}"))?;
+    *state
+        .runtime_process
+        .lock()
+        .map_err(|_| "Stato del runtime non disponibile".to_string())? = Some(child);
+    Ok(())
+}
+
+pub(crate) fn try_start_installed_runtime(state: &AppState) {
+    let _ = spawn_runtime_process(state);
+}
+
+#[tauri::command]
+pub async fn get_runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatus, String> {
+    let mut running = bridge_status().await.available || process_is_running(&state.runtime_process);
+    let installing = install_process_is_running(state.inner());
+    let installed = runtime_python(&state.engine_data_dir).is_file()
+        && state.engine_data_dir.join(".ready").is_file();
+    if installed && !installing && !running {
+        let _ = spawn_runtime_process(state.inner());
+        running = process_is_running(&state.runtime_process);
+    }
+    let supported = cfg!(any(target_os = "macos", target_os = "windows"));
+    let last_install_result = state
+        .last_install_result
+        .lock()
+        .ok()
+        .and_then(|result| result.clone());
+    Ok(RuntimeStatus {
+        platform: match std::env::consts::OS {
+            "macos" => "macOS".to_string(),
+            "windows" => "Windows".to_string(),
+            other => other.to_string(),
+        },
+        supported,
+        installed,
+        running,
+        installing,
+        data_directory: state.engine_data_dir.to_string_lossy().into_owned(),
+        log_path: state
+            .engine_data_dir
+            .join("install.log")
+            .to_string_lossy()
+            .into_owned(),
+        message: if running {
+            "Motori locali attivi".to_string()
+        } else if installing {
+            "Installazione dei componenti in corso".to_string()
+        } else if installed {
+            "Runtime installato, pronto per essere avviato".to_string()
+        } else if let Some(result) = last_install_result {
+            result
+        } else if supported {
+            "Runtime da installare una sola volta".to_string()
+        } else {
+            "Piattaforma non ancora supportata".to_string()
+        },
+    })
+}
+
+#[tauri::command]
+pub async fn start_engine_runtime(state: State<'_, AppState>) -> Result<RuntimeStatus, String> {
+    spawn_runtime_process(state.inner())?;
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    get_runtime_status(state).await
+}
+
+#[tauri::command]
+pub async fn install_engine_runtime(state: State<'_, AppState>) -> Result<RuntimeStatus, String> {
+    if install_process_is_running(state.inner()) {
+        return get_runtime_status(state).await;
+    }
+    if !cfg!(any(target_os = "macos", target_os = "windows")) {
+        return Err("L’installazione guidata supporta macOS e Windows".to_string());
+    }
+    fs::create_dir_all(&state.engine_data_dir).map_err(|error| error.to_string())?;
+    if let Ok(mut last_result) = state.last_install_result.lock() {
+        *last_result = None;
+    }
+    let log_path = state.engine_data_dir.join("install.log");
+    let stdout = File::create(&log_path).map_err(|error| error.to_string())?;
+    let stderr = stdout.try_clone().map_err(|error| error.to_string())?;
+    let script = if cfg!(windows) {
+        state
+            .engine_resource_dir
+            .join("scripts")
+            .join("bootstrap-windows.ps1")
+    } else {
+        state
+            .engine_resource_dir
+            .join("scripts")
+            .join("bootstrap-macos.sh")
+    };
+    if !script.is_file() {
+        return Err("Script di installazione non presente nel pacchetto".to_string());
+    }
+    let mut command = if cfg!(windows) {
+        let mut command = Command::new("powershell.exe");
+        command
+            .arg("-NoLogo")
+            .arg("-NoProfile")
+            .arg("-NonInteractive")
+            .arg("-ExecutionPolicy")
+            .arg("Bypass")
+            .arg("-File")
+            .arg(&script)
+            .arg("-SourceDir")
+            .arg(&state.engine_resource_dir)
+            .arg("-DataDir")
+            .arg(&state.engine_data_dir);
+        command
+    } else {
+        let mut command = Command::new("/bin/zsh");
+        command
+            .arg(&script)
+            .arg("--source")
+            .arg(&state.engine_resource_dir)
+            .arg("--data")
+            .arg(&state.engine_data_dir);
+        command
+    };
+    command
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let child = command
+        .spawn()
+        .map_err(|error| format!("Installazione non avviata: {error}"))?;
+    *state
+        .installer_process
+        .lock()
+        .map_err(|_| "Stato installazione non disponibile".to_string())? = Some(child);
+    get_runtime_status(state).await
 }
 
 pub(crate) async fn bridge_status() -> BridgeStatus {
@@ -402,7 +726,14 @@ pub async fn start_jobs(
         return Err("Avvia al massimo 500 elementi per batch".to_string());
     }
     if !bridge_status().await.available {
-        return Err("Avvia Local AI Desk per rendere disponibili i motori locali".to_string());
+        let _ = spawn_runtime_process(state.inner());
+        tokio::time::sleep(Duration::from_millis(700)).await;
+    }
+    if !bridge_status().await.available {
+        return Err(
+            "I motori locali non sono attivi. Apri Motori per installarli o riavviarli."
+                .to_string(),
+        );
     }
 
     let database_path = state.database_path.clone();
@@ -624,12 +955,32 @@ fn create_results_zip(
     })
 }
 
+#[cfg(target_os = "macos")]
 fn reveal(path: &Path) -> Result<(), String> {
     Command::new("/usr/bin/open")
         .arg("-R")
         .arg(path)
         .spawn()
         .map_err(|error| format!("Finder non disponibile: {error}"))?;
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn reveal(path: &Path) -> Result<(), String> {
+    Command::new("explorer.exe")
+        .arg(format!("/select,{}", path.to_string_lossy()))
+        .spawn()
+        .map_err(|error| format!("Esplora file non disponibile: {error}"))?;
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn reveal(path: &Path) -> Result<(), String> {
+    let directory = path.parent().unwrap_or(path);
+    Command::new("xdg-open")
+        .arg(directory)
+        .spawn()
+        .map_err(|error| format!("Gestore file non disponibile: {error}"))?;
     Ok(())
 }
 

@@ -1483,6 +1483,42 @@ tbody tr:last-child td {
   gap: 12px;
 }
 
+.runtime-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  border-color: rgba(105, 148, 16, 0.28);
+  background: rgba(183, 244, 59, 0.08);
+}
+
+.runtime-card > div {
+  max-width: 700px;
+}
+
+.runtime-card h3 {
+  margin: 8px 0 7px;
+  font-size: 15px;
+}
+
+.runtime-card p,
+.runtime-card small {
+  display: block;
+  margin: 0;
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 1.5;
+}
+
+.runtime-card small {
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+
+.runtime-card .button {
+  flex: 0 0 auto;
+}
+
 .model-card {
   min-height: 175px;
   padding: 18px;
@@ -1595,7 +1631,7 @@ tbody tr:last-child td {
 .diagnostic-grid {
   display: grid;
   grid-column: 1 / -1;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   padding-top: 15px;
   border-top: 1px solid var(--line);
 }

@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
+    process::Child,
     sync::{atomic::AtomicBool, Arc, Mutex},
 };
 
@@ -16,6 +17,12 @@ pub struct AppState {
     pub data_dir: PathBuf,
     pub results_dir: PathBuf,
     pub downloads_dir: PathBuf,
+    pub engine_resource_dir: PathBuf,
+    pub engine_data_dir: PathBuf,
+    pub runtime_process: Arc<Mutex<Option<Child>>>,
+    pub ollama_process: Arc<Mutex<Option<Child>>>,
+    pub installer_process: Arc<Mutex<Option<Child>>>,
+    pub last_install_result: Arc<Mutex<Option<String>>>,
     pub scheduler: Arc<Semaphore>,
     pub cancellations: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
 }

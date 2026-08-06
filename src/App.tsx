@@ -20,6 +20,7 @@ import type {
   Job,
   SectionId,
   StartJobsReport,
+  RuntimeStatus,
   WorkflowOptions,
 } from "./types";
 
@@ -45,12 +46,26 @@ const emptySnapshot: AppSnapshot = {
     engines: [],
   },
   system: {
+    operatingSystem: "—",
+    platformLabel: "—",
+    computeLabel: "—",
     architecture: "—",
     logicalCpus: 0,
     totalMemoryBytes: 0,
     availableMemoryBytes: 0,
     dataDirectory: "—",
   },
+};
+
+const emptyRuntime: RuntimeStatus = {
+  platform: "—",
+  supported: true,
+  installed: false,
+  running: false,
+  installing: false,
+  dataDirectory: "—",
+  logPath: "—",
+  message: "Verifica del runtime…",
 };
 
 interface Notice {
@@ -62,6 +77,7 @@ interface Notice {
 function App() {
   const [active, setActive] = useState<SectionId>("home");
   const [snapshot, setSnapshot] = useState<AppSnapshot>(emptySnapshot);
+  const [runtime, setRuntime] = useState<RuntimeStatus>(emptyRuntime);
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -84,8 +100,14 @@ function App() {
       }
 
       try {
-        const initial = await invoke<AppSnapshot>("bootstrap_snapshot");
-        if (mounted) setSnapshot(initial);
+        const [initial, runtimeStatus] = await Promise.all([
+          invoke<AppSnapshot>("bootstrap_snapshot"),
+          invoke<RuntimeStatus>("get_runtime_status"),
+        ]);
+        if (mounted) {
+          setSnapshot(initial);
+          setRuntime(runtimeStatus);
+        }
       } catch (error) {
         if (mounted) {
           setNotice({
@@ -109,9 +131,15 @@ function App() {
     if (!isTauri()) return;
     let stopped = false;
     const refreshBridge = () => {
-      void invoke<BridgeStatus>("get_bridge_status")
-        .then((bridge) => {
-          if (!stopped) setSnapshot((current) => ({ ...current, bridge }));
+      void Promise.all([
+        invoke<BridgeStatus>("get_bridge_status"),
+        invoke<RuntimeStatus>("get_runtime_status"),
+      ])
+        .then(([bridge, runtimeStatus]) => {
+          if (!stopped) {
+            setSnapshot((current) => ({ ...current, bridge }));
+            setRuntime(runtimeStatus);
+          }
         })
         .catch(() => undefined);
     };
@@ -248,6 +276,23 @@ function App() {
     }
   }
 
+  async function handleRuntimeAction() {
+    try {
+      const command = runtime.installed ? "start_engine_runtime" : "install_engine_runtime";
+      const next = await invoke<RuntimeStatus>(command);
+      setRuntime(next);
+      setNotice({
+        tone: "success",
+        title: runtime.installed ? "Avvio richiesto" : "Installazione avviata",
+        detail: runtime.installed
+          ? "I motori saranno disponibili tra pochi secondi."
+          : "Il download prosegue in background; puoi seguirlo nella schermata Motori.",
+      });
+    } catch (error) {
+      setNotice({ tone: "error", title: "Runtime non disponibile", detail: String(error) });
+    }
+  }
+
   function renderView() {
     if (active === "home") {
       return (
@@ -283,7 +328,16 @@ function App() {
         />
       );
     }
-    if (active === "models") return <ModelsView bridge={snapshot.bridge} />;
+    if (active === "models") {
+      return (
+        <ModelsView
+          bridge={snapshot.bridge}
+          onRuntimeAction={() => void handleRuntimeAction()}
+          runtime={runtime}
+          system={snapshot.system}
+        />
+      );
+    }
     return <PlaceholderView onNavigate={setActive} section={active} snapshot={snapshot} />;
   }
 

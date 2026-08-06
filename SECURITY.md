@@ -10,6 +10,8 @@ Local AI Desk 2 è in fase Foundation e non è ancora una release pubblica.
 - il solo permesso aggiuntivo è il selettore nativo di apertura file;
 - la Content Security Policy impedisce connessioni web dal frontend;
 - il ponte temporaneo verso la v1 usa un indirizzo loopback fisso e un timeout;
+- backend e Ollama vengono avviati senza console e accettano solo loopback;
+- le risorse installate restano separate da venv, cache e modelli per utente;
 - i path importati vengono canonicalizzati e devono riferirsi a file reali;
 - i file grandi vengono letti a blocchi, non caricati interamente in memoria;
 - il database abilita foreign key, WAL e timeout in caso di concorrenza.

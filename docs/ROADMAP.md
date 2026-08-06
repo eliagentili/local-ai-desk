@@ -11,9 +11,23 @@ Stato: **completata nella 0.1**.
 - shell Tauri/React e design system;
 - database, libreria, import multiplo e deduplicazione;
 - coda persistente iniziale;
-- diagnostica Mac e rilevamento dei motori v1;
+- diagnostica del dispositivo e rilevamento dei motori v1;
 - documentazione di prodotto, architettura e sicurezza;
 - build macOS riproducibile.
+
+## F0.5 — Portabilità desktop
+
+Stato: **completata nella 0.3 per macOS Apple Silicon e Windows x64**.
+
+- shell, filesystem reveal e process lifecycle multipiattaforma;
+- runtime in background senza Terminal/PowerShell visibile;
+- dati scrivibili separati dalle risorse installate;
+- bootstrap locale dei sette motori per entrambe le piattaforme;
+- matrix CI con test Python/Rust e artifact `.app`, `.dmg`, `.exe`, `.msi`;
+- icone native ICNS/ICO e installer per utente senza privilegi amministrativi.
+
+Restano necessari firma/notarizzazione Apple e certificato Authenticode prima
+di distribuire pubblicamente gli installer.
 
 La migrazione compatibile del database e il recovery dei lavori interrotti sono
 stati aggiunti nella 0.2. Log locale redatto e recovery avanzato restano attività
@@ -24,7 +38,7 @@ trasversali prima della 1.0.
 Stato: **prima release utilizzabile nella 0.2**.
 
 - adapter versionato verso i motori esistenti;
-- scheduler resource-aware per CPU, memoria, Metal e termiche;
+- scheduler resource-aware per CPU, memoria, acceleratore e termiche;
 - concorrenza per motore e backpressure globale;
 - progresso a eventi per file e per batch; **completato**;
 - annulla e annulla tutto; **completato**;
@@ -54,7 +68,7 @@ regressioni.
 - ricerca full-text locale e filtri salvati;
 - ricerca semantica opzionale con embedding locale;
 - duplicati, retention, backup e restore;
-- Quick Look, drag & drop e integrazione Finder/Share Sheet.
+- Quick Look/preview, drag & drop e integrazione Finder/Explorer/Share Sheet.
 
 ## F4 — Workflow e automazioni
 
@@ -72,7 +86,7 @@ regressioni.
 - benchmark iniziale sul dispositivo e profili Eco/Bilanciato/Max;
 - onboarding guidato e download selettivo;
 - aggiornamenti firmati dell'app;
-- notarizzazione macOS, SBOM, vulnerability scan e release notes;
+- notarizzazione macOS, firma Windows, SBOM, vulnerability scan e release notes;
 - localizzazioni italiana e inglese complete.
 
 ## F6 — Estensioni, dopo la stabilità
@@ -90,4 +104,4 @@ regressioni.
 - test su PDF grandi/scansionati, video multi-GB e batch misti;
 - VoiceOver e sola tastiera sui flussi principali;
 - privacy audit, threat model e inventario licenze pubblicati;
-- crash-free rate e tempi di avvio misurati su più configurazioni Apple Silicon.
+- crash-free rate e tempi di avvio misurati su Apple Silicon e PC Windows.

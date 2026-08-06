@@ -69,11 +69,27 @@ pub struct EngineStatus {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SystemSnapshot {
+    pub operating_system: String,
+    pub platform_label: String,
+    pub compute_label: String,
     pub architecture: String,
     pub logical_cpus: usize,
     pub total_memory_bytes: u64,
     pub available_memory_bytes: u64,
     pub data_directory: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeStatus {
+    pub platform: String,
+    pub supported: bool,
+    pub installed: bool,
+    pub running: bool,
+    pub installing: bool,
+    pub data_directory: String,
+    pub log_path: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

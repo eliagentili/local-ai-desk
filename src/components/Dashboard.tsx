@@ -31,7 +31,7 @@ export function Dashboard({ snapshot, onImport, onNavigate }: DashboardProps) {
           <h2>
             Il tuo studio AI.
             <br />
-            <span>Tutto sul Mac.</span>
+            <span>Tutto sul tuo computer.</span>
           </h2>
           <p>
             Trasforma documenti, PDF, audio e video senza spedire i tuoi file
@@ -154,7 +154,7 @@ export function Dashboard({ snapshot, onImport, onNavigate }: DashboardProps) {
           <span className="eyebrow">Compatibilità</span>
           <h3>Motori esistenti</h3>
           <p>
-            La nuova app esegue la suite attuale solo sul loopback del Mac. Nessun
+            La nuova app esegue la suite solo sul loopback del dispositivo. Nessun
             endpoint remoto, upload cloud o token esterno.
           </p>
           <div className="bridge-status" data-ready={snapshot.bridge.available}>

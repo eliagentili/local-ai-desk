@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "python": "3.12",
+  "components": {
+    "pdf2zh-next": "2.9.0",
+    "openai-privacy-filter": "f7f00ca7fb869683eb732c010299d901457f19c3",
+    "ollama": "stable",
+    "faster-whisper-model": "small",
+    "ollama-models": ["glm-ocr", "translategemma:12b"]
+  }
+}

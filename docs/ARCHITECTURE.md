@@ -33,7 +33,7 @@ I file non vengono copiati durante l'importazione. L'hash viene calcolato con
 buffer da 8 MB, quindi il costo di memoria resta limitato anche per video da
 diversi GB. Le operazioni di disco girano fuori dal thread UI.
 
-## Adapter di esecuzione 0.2
+## Runtime desktop 0.3
 
 Il core Rust interroga ed esegue lavori esclusivamente su
 `http://127.0.0.1:8787`, con timeout e URL non configurabile dall’interfaccia.
@@ -46,6 +46,20 @@ PDF espone pagine, parti e fasi reali; per i motori che non espongono unità di
 lavoro la UI mostra correttamente un avanzamento indeterminato. Gli output sono
 scritti dentro il contenitore dell’app e i PDF usano un file parziale rinominato
 solo a completamento.
+
+Il bundle contiene sorgenti e bootstrap comuni, ma non scrive mai nella propria
+directory di installazione. Tauri risolve le risorse in `.app/Contents/Resources`
+su macOS e accanto ai file installati sotto Windows; venv, tool, cache e modelli
+vivono invece nella cartella dati per utente. Il core avvia Python/Ollama con
+stdio su log, senza console visibile, e conserva gli handle dei soli processi
+creati dall'app per terminarli in modo pulito.
+
+Le differenze di sistema sono circoscritte agli adapter nativi:
+
+- Finder `open -R` su macOS ed `explorer.exe /select` su Windows;
+- process group POSIX e `CREATE_NEW_PROCESS_GROUP`/`CREATE_NO_WINDOW` su Windows;
+- `.venv/bin` su Unix e `.venv\Scripts` su Windows;
+- `.app`/`.dmg` su macOS e NSIS `.exe`/WiX `.msi` su Windows.
 
 ## Contratto dei job
 

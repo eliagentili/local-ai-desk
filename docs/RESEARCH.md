@@ -1,7 +1,7 @@
 # Ricerca tecnica e scelte
 
 Aggiornata il 6 agosto 2026. Le scelte sono ipotesi tecniche da validare con un
-benchmark riproducibile sul Mac target; popolarità e numero di stelle non sono
+benchmark riproducibile sui dispositivi target; popolarità e numero di stelle non sono
 usati come sostituti di qualità, velocità o licenza.
 
 ## Shell desktop
@@ -47,7 +47,7 @@ Per il secondo problema servono almeno due pack:
   [CTranslate2](https://github.com/OpenNMT/CTranslate2), per download ridotti e
   molte coppie linguistiche;
 - **Qualità:** TranslateGemma o altro modello generativo con glossario e memoria
-  di traduzione locali, accelerato su Apple Silicon dopo benchmark.
+  di traduzione locali, accelerato sul dispositivo dopo benchmark.
 
 La v1 usa già TranslateGemma 12B. Non viene sostituito sulla base di impressioni:
 il gate è un test EN↔IT con prosa, tabelle, termini coerenti, formule, PDF
@@ -60,7 +60,7 @@ valutazione umana, pagine/minuto, picco RAM e dimensione del pack.
 durante la migrazione perché è maturo, supporta VAD e timestamp e già funziona
 nella v1.
 
-Sul Mac, tuttavia, il candidato default da confrontare è
+Su Apple Silicon, tuttavia, il candidato default da confrontare è
 [whisper.cpp](https://github.com/ggml-org/whisper.cpp): offre un'integrazione C/C++
 compatta e percorsi Metal/Core ML. Anche
 [MLX Whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper) entra
@@ -71,7 +71,7 @@ velocità su clip brevi.
 Diarizzazione e allineamento preciso devono essere pack separati perché possono
 avere licenze, dipendenze e costi di memoria diversi.
 
-## Runtime Apple Silicon
+## Runtime e piattaforme
 
 [MLX](https://github.com/ml-explore/mlx) è un'opzione primaria per i modelli che
 dispongono di conversioni affidabili: sfrutta memoria unificata e CPU/GPU Apple
@@ -85,6 +85,12 @@ un solo runtime:
 engine id · versione · licenza · formati · lingue · RAM stimata
 acceleratori · concorrenza sicura · checksum · entrypoint · health check
 ```
+
+La shell e i motori Python scelti hanno percorsi supportati anche su Windows.
+MLX/Metal resta un'ottimizzazione Mac; su Windows il baseline portabile è CPU
+con CTranslate2/Faster Whisper e Ollama può sfruttare GPU NVIDIA o AMD quando
+supportata. I pacchetti e i benchmark devono quindi dichiarare esplicitamente
+sistema, architettura e acceleratore anziché promettere parità di velocità.
 
 ## Benchmark obbligatorio
 

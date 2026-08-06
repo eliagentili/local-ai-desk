@@ -1,8 +1,9 @@
 # Local AI Desk 2
 
 Local AI Desk 2 è il nuovo workspace desktop, local-first e open source per
-documenti, PDF, immagini, audio e video. È progettato per macOS Apple Silicon,
-con dati persistenti sul dispositivo e motori installabili a moduli.
+documenti, PDF, immagini, audio e video. È progettato per macOS Apple Silicon e
+Windows x64, con dati persistenti sul dispositivo e motori installabili a
+moduli.
 
 Questa cartella è intenzionalmente separata da `Local-AI-Desk`: la versione 1
 rimane installata e funzionante mentre le funzioni vengono migrate e verificate
@@ -12,11 +13,11 @@ una alla volta.
 
 ![Coda con risultato completato](docs/screenshots/f1-activity-completed.png)
 
-## Stato della versione 0.2
+## Stato della versione 0.3
 
 - shell desktop nativa con Tauri 2 e React 19;
 - libreria SQLite persistente nel contenitore dell'app;
-- importazione multipla tramite selettore nativo macOS;
+- importazione multipla tramite selettore nativo macOS/Windows;
 - nessun limite artificiale alla dimensione dei file;
 - hash BLAKE3 in streaming per deduplicare senza caricare file enormi in RAM;
 - Studio guidato per Auto, traduzione PDF, OCR, trascrizione e Privacy Shield;
@@ -26,6 +27,10 @@ una alla volta.
 - annullamento per lavoro o per l’intero batch;
 - risultati salvati atomicamente e ZIP finale con manifest JSON;
 - adapter locale verso i sette motori già installati, su `127.0.0.1`;
+- bootstrap dei motori in background, senza finestre Terminal o PowerShell;
+- codice, modelli e cache separati per funzionare anche sotto `Program Files`;
+- rami nativi per Finder ed Esplora file, process group e annullamento;
+- pacchetti macOS `.app`/`.dmg` e Windows `.exe`/`.msi` nella CI;
 - CSP restrittiva e un solo permesso frontend: apertura del selettore file;
 - interfaccia accessibile, responsive, chiara anche in dark mode.
 
@@ -35,7 +40,8 @@ presentati come già completi nell’interfaccia.
 
 ## Sviluppo
 
-Prerequisiti: Node.js 20+, Rust stable e Xcode Command Line Tools.
+Prerequisiti comuni: Node.js 20+ e Rust stable. Su macOS servono Xcode Command
+Line Tools; su Windows servono Microsoft C++ Build Tools e WebView2.
 
 ```bash
 npm install
@@ -52,11 +58,36 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
-Build dell'app macOS:
+Build macOS:
 
 ```bash
-npm run tauri build -- --bundles app
+npm run tauri build -- --bundles app,dmg
 ```
+
+Build Windows (da Windows):
+
+```powershell
+npm ci
+npm run tauri build -- --bundles nsis,msi
+```
+
+Il workflow [desktop.yml](.github/workflows/desktop.yml) esegue test e build su
+runner nativi e pubblica come artifact entrambe le famiglie di installer. Non è
+necessario né consigliato tentare di produrre un MSI da macOS.
+
+## Runtime dei motori
+
+Il codice Python dei motori è incluso nel bundle. Al primo avvio, **Motori →
+Installa motori** crea l'ambiente nel profilo dell'utente e scarica solo da
+origini ufficiali i componenti e modelli necessari. È un'operazione una tantum,
+può superare 20 GB e continua in background senza aprire un terminale.
+
+- macOS: `~/Library/Application Support/it.local.localaidesk2/engine`
+- Windows: `%APPDATA%\it.local.localaidesk2\engine`
+
+L'app prova ad avviare automaticamente backend e Ollama; alla chiusura termina
+solo i processi che ha avviato lei. Un runtime già attivo sul loopback viene
+riutilizzato senza duplicarlo.
 
 ## Documentazione
 
