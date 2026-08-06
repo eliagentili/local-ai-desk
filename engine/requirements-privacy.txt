@@ -1,5 +1,5 @@
 huggingface-hub==1.26.1
-numpy==2.3.5
+numpy==2.5.1
 packaging==26.3
 torch==2.13.0
 safetensors==0.8.0
