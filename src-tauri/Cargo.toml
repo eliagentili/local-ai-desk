@@ -1,9 +1,11 @@
 [package]
 name = "local-ai-desk-2"
-version = "0.3.0"
+version = "0.3.0-beta.1"
 description = "A private, local-first AI workspace for macOS and Windows"
 authors = ["Local AI Desk contributors"]
 edition = "2021"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/eliagentili/local-ai-desk"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

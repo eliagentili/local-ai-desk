@@ -1,17 +1,13 @@
 # Licenze e distribuzione
 
-## Proposta per il codice
+## Licenza del codice
 
-Prima della pubblicazione conviene scegliere esplicitamente tra:
+Il progetto è pubblicato con licenza **AGPL-3.0-or-later**. È la scelta più
+coerente con l'obiettivo di mantenere libero il cruscotto e con i motori AGPL
+integrati nel flusso locale, in particolare PDFMathTranslate-next e PyMuPDF.
 
-- **AGPL-3.0-or-later**, se l'obiettivo prioritario è mantenere pubbliche anche
-  modifiche distribuite o offerte come servizio;
-- **Apache-2.0**, se l'obiettivo prioritario è massimizzare riuso e contributi,
-  mantenendo una chiara concessione sui brevetti;
-- una strategia duale, solo se esiste una reale esigenza commerciale futura.
-
-Nessun file `LICENSE` viene aggiunto nella Foundation finché questa decisione
-non è approvata.
+La licenza copre il codice originale del repository. Non cambia le licenze dei
+componenti separati scaricati dall'utente.
 
 ## Motori e modelli
 
@@ -31,6 +27,8 @@ selezionati dall'utente da origini dichiarate e verificate.
 
 ## Release pubblica
 
-Ogni release dovrà includere inventario dipendenze, `THIRD_PARTY_NOTICES`, SBOM,
-checksum, firma/notarizzazione e una pagina privacy che distingua nettamente
-funzioni locali da eventuali integrazioni esterne opt-in.
+Ogni release include `THIRD_PARTY_NOTICES`, SBOM, checksum e una pagina privacy.
+La prima beta è intenzionalmente indicata come non firmata. Firma/notarizzazione
+Apple e Authenticode Windows restano obbligatorie prima della stabile 1.0.
+
+La matrice verificata si trova in [../THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).

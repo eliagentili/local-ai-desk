@@ -2,10 +2,25 @@
   "schemaVersion": 1,
   "python": "3.12",
   "components": {
+    "uv": "0.12.2",
     "pdf2zh-next": "2.9.0",
     "openai-privacy-filter": "f7f00ca7fb869683eb732c010299d901457f19c3",
-    "ollama": "stable",
+    "ollama": "0.32.6",
     "faster-whisper-model": "small",
     "ollama-models": ["glm-ocr", "translategemma:12b"]
+  },
+  "verifiedDownloads": {
+    "uv-macos-aarch64": "sha256:fa909fea3bc06f460db79017030a221fdbc43ec4478f089cb554d8335c090817",
+    "uv-windows-x86_64": "sha256:01442d8ce5c7124151a73e697c836d252c6da853c18c73206d3cc4c2378a91d2",
+    "ollama-macos": "sha256:cc708ee7a9366b73b97d3f2999e25bb24b0a86feb41a0d2ced784ff4d4855e6d",
+    "ollama-windows-x86_64": "sha256:756dd7e41fbde34b8869bd7106d626d913a566cce4d0a95a61aa0579f455ddbc",
+    "openai-privacy-filter-source": "sha256:024fbe180ad5f327e3222246dad08d048dabb39d7cec5e00ee20fb8bbed66210"
+  },
+  "lockedEnvironments": {
+    "runtime-macos": "sha256:5728b82b35843e4a1f569359a5d58ef791fe531ccffde49f4854e7fd4ea62e90",
+    "runtime-windows": "sha256:1b65397d475da20ccb677a7d95e3edab3ff25b98408f9b0c6d207da23dd91fb2",
+    "translation-macos": "sha256:321e10f5cdeadb62cdcf2ab34e2d654131faf5b8fad85d9744fa415a690bf712",
+    "translation-windows": "sha256:ac52fbe4723ba1c7643b667a4ca078ba924a719c3de7f1db3965e3fccc66ab2c",
+    "translation-overrides": "sha256:5f3116ccc62ebf78350baa0db42bd423e2b575fb50689d97bcfafce33e793d1d"
   }
 }

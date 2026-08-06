@@ -26,8 +26,8 @@ Stato: **completata nella 0.3 per macOS Apple Silicon e Windows x64**.
 - matrix CI con test Python/Rust e artifact `.app`, `.dmg`, `.exe`, `.msi`;
 - icone native ICNS/ICO e installer per utente senza privilegi amministrativi.
 
-Restano necessari firma/notarizzazione Apple e certificato Authenticode prima
-di distribuire pubblicamente gli installer.
+Firma/notarizzazione Apple e certificato Authenticode restano necessari prima
+della release stabile. La beta pubblica espone chiaramente l'assenza delle firme.
 
 La migrazione compatibile del database e il recovery dei lavori interrotti sono
 stati aggiunti nella 0.2. Log locale redatto e recovery avanzato restano attività

@@ -7,6 +7,20 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 
+$UvVersion = "0.12.2"
+$UvSha256 = "01442d8ce5c7124151a73e697c836d252c6da853c18c73206d3cc4c2378a91d2"
+$OllamaVersion = "v0.32.6"
+$OllamaSha256 = "756dd7e41fbde34b8869bd7106d626d913a566cce4d0a95a61aa0579f455ddbc"
+$PrivacySha256 = "024fbe180ad5f327e3222246dad08d048dabb39d7cec5e00ee20fb8bbed66210"
+
+function Assert-Sha256 {
+  param([string]$Path, [string]$Expected)
+  $Actual = (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLowerInvariant()
+  if ($Actual -ne $Expected.ToLowerInvariant()) {
+    throw "Checksum non valido per $([IO.Path]::GetFileName($Path))"
+  }
+}
+
 if (-not (Test-Path (Join-Path $SourceDir "backend"))) {
   throw "Pacchetto del runtime non valido"
 }
@@ -19,9 +33,10 @@ $UvDir = Join-Path $DataDir "tools\uv"
 $UvBin = Join-Path $UvDir "uv.exe"
 if (-not (Test-Path $UvBin)) {
   New-Item -ItemType Directory -Force -Path $UvDir | Out-Null
-  $env:UV_UNMANAGED_INSTALL = $UvDir
-  $env:UV_NO_MODIFY_PATH = "1"
-  Invoke-RestMethod -UseBasicParsing "https://astral.sh/uv/install.ps1" | Invoke-Expression
+  $UvArchive = Join-Path $DataDir "work\uv-x86_64-pc-windows-msvc.zip"
+  Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/astral-sh/uv/releases/download/$UvVersion/uv-x86_64-pc-windows-msvc.zip" -OutFile $UvArchive
+  Assert-Sha256 -Path $UvArchive -Expected $UvSha256
+  Expand-Archive -Path $UvArchive -DestinationPath $UvDir -Force
 }
 if (-not (Test-Path $UvBin)) {
   throw "Il bootstrap ufficiale di uv non ha prodotto uv.exe"
@@ -30,37 +45,35 @@ $env:UV_PYTHON_INSTALL_DIR = Join-Path $DataDir "python"
 & $UvBin python install 3.12 --install-dir $env:UV_PYTHON_INSTALL_DIR
 $RuntimePython = Join-Path $DataDir ".venv\Scripts\python.exe"
 if (-not (Test-Path $RuntimePython)) {
-  & $UvBin venv --seed --python 3.12 (Join-Path $DataDir ".venv")
+  & $UvBin venv --python 3.12 (Join-Path $DataDir ".venv")
 }
-& $RuntimePython -m pip install --upgrade pip wheel setuptools
-& $RuntimePython -m pip install -r (Join-Path $SourceDir "requirements-core.txt")
-
 Write-Output "[2/6] Conversione, OCR e trascrizione"
-& $RuntimePython -m pip install -r (Join-Path $SourceDir "requirements-tools.txt")
-& $RuntimePython -m pip install -r (Join-Path $SourceDir "requirements-paddle.txt")
+& $UvBin pip install --python $RuntimePython --require-hashes -r (Join-Path $SourceDir "requirements-runtime-windows.lock")
 
 Write-Output "[3/6] Traduzione PDF con layout"
 $TranslationDir = Join-Path $DataDir "tools\pdf2zh-next"
 $TranslationPython = Join-Path $TranslationDir ".venv\Scripts\python.exe"
 if (-not (Test-Path $TranslationPython)) {
-  & $RuntimePython -m venv (Join-Path $TranslationDir ".venv")
+  & $UvBin venv --python $RuntimePython (Join-Path $TranslationDir ".venv")
 }
-& $TranslationPython -m pip install --upgrade pip
-& $TranslationPython -m pip install "pdf2zh-next==2.9.0"
-& $TranslationPython -c "from babeldoc.assets.assets import warmup; warmup()"
+& $UvBin pip install --python $TranslationPython --require-hashes -r (Join-Path $SourceDir "requirements-translation-windows.lock")
+& $UvBin pip uninstall --python $TranslationPython gradio gradio-client gradio-i18n gradio-pdf
+& $UvBin pip install --python $TranslationPython --require-hashes -r (Join-Path $SourceDir "requirements-translation-overrides.lock")
+& $TranslationPython -c "from babeldoc.assets.assets import warmup; from pdf2zh_next.high_level import do_translate_async_stream; warmup()"
 
 Write-Output "[4/6] Privacy Filter locale"
 $PrivacySource = Join-Path $DataDir "tools\openai-privacy-filter"
 if (-not (Test-Path (Join-Path $PrivacySource "pyproject.toml"))) {
   $PrivacyArchive = Join-Path $DataDir "work\privacy-filter.zip"
   Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/openai/privacy-filter/archive/f7f00ca7fb869683eb732c010299d901457f19c3.zip" -OutFile $PrivacyArchive
+  Assert-Sha256 -Path $PrivacyArchive -Expected $PrivacySha256
   $Staging = Join-Path $DataDir "work\privacy-filter-source"
   Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $Staging
   Expand-Archive -Path $PrivacyArchive -DestinationPath $Staging -Force
   $Extracted = Get-ChildItem -Directory $Staging | Select-Object -First 1
   Copy-Item -Recurse -Force $Extracted.FullName $PrivacySource
 }
-& $RuntimePython -m pip install $PrivacySource
+& $UvBin pip install --python $RuntimePython --no-deps $PrivacySource
 
 Write-Output "[5/6] Ollama e modelli di traduzione/OCR"
 $OllamaDir = Join-Path $DataDir "tools\ollama"
@@ -68,7 +81,8 @@ $OllamaBin = Join-Path $OllamaDir "ollama.exe"
 if (-not (Test-Path $OllamaBin)) {
   New-Item -ItemType Directory -Force -Path $OllamaDir | Out-Null
   $OllamaArchive = Join-Path $DataDir "work\ollama-windows-amd64.zip"
-  Invoke-WebRequest -UseBasicParsing -Uri "https://ollama.com/download/ollama-windows-amd64.zip" -OutFile $OllamaArchive
+  Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/ollama/ollama/releases/download/$OllamaVersion/ollama-windows-amd64.zip" -OutFile $OllamaArchive
+  Assert-Sha256 -Path $OllamaArchive -Expected $OllamaSha256
   Expand-Archive -Path $OllamaArchive -DestinationPath $OllamaDir -Force
 }
 $env:OLLAMA_MODELS = Join-Path $DataDir "models\ollama"

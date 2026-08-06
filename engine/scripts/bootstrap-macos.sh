@@ -1,6 +1,23 @@
 #!/bin/zsh
 set -euo pipefail
 
+uv_version="0.12.2"
+uv_sha256="fa909fea3bc06f460db79017030a221fdbc43ec4478f089cb554d8335c090817"
+ollama_version="v0.32.6"
+ollama_sha256="cc708ee7a9366b73b97d3f2999e25bb24b0a86feb41a0d2ced784ff4d4855e6d"
+privacy_sha256="024fbe180ad5f327e3222246dad08d048dabb39d7cec5e00ee20fb8bbed66210"
+
+verify_sha256() {
+  local file="$1"
+  local expected="$2"
+  local actual
+  actual="$(shasum -a 256 "$file" | awk '{print $1}')"
+  [[ "$actual" == "$expected" ]] || {
+    echo "Checksum non valido per $(basename "$file")"
+    return 1
+  }
+}
+
 source_dir=""
 data_dir=""
 while (( $# > 0 )); do
@@ -24,26 +41,27 @@ uv_dir="$data_dir/tools/uv"
 uv_bin="$uv_dir/uv"
 if [[ ! -x "$uv_bin" ]]; then
   mkdir -p "$uv_dir"
-  curl -LsSf https://astral.sh/uv/install.sh | env UV_UNMANAGED_INSTALL="$uv_dir" sh
+  uv_archive="$data_dir/work/uv-aarch64-apple-darwin.tar.gz"
+  curl -fL "https://github.com/astral-sh/uv/releases/download/$uv_version/uv-aarch64-apple-darwin.tar.gz" -o "$uv_archive"
+  verify_sha256 "$uv_archive" "$uv_sha256"
+  tar -xzf "$uv_archive" -C "$uv_dir" --strip-components=1
 fi
 export UV_PYTHON_INSTALL_DIR="$data_dir/python"
 "$uv_bin" python install 3.12 --install-dir "$UV_PYTHON_INSTALL_DIR"
-[[ -x "$data_dir/.venv/bin/python" ]] || "$uv_bin" venv --seed --python 3.12 "$data_dir/.venv"
+[[ -x "$data_dir/.venv/bin/python" ]] || "$uv_bin" venv --python 3.12 "$data_dir/.venv"
 runtime_python="$data_dir/.venv/bin/python"
-"$runtime_python" -m pip install --upgrade pip wheel setuptools
-"$runtime_python" -m pip install -r "$source_dir/requirements-core.txt"
-
 echo "[2/6] Conversione, OCR e trascrizione"
-"$runtime_python" -m pip install -r "$source_dir/requirements-tools.txt"
-"$runtime_python" -m pip install -r "$source_dir/requirements-paddle.txt"
+"$uv_bin" pip install --python "$runtime_python" --require-hashes -r "$source_dir/requirements-runtime-macos.lock"
 
 echo "[3/6] Traduzione PDF con layout"
 translation_dir="$data_dir/tools/pdf2zh-next"
-[[ -x "$translation_dir/.venv/bin/python" ]] || "$runtime_python" -m venv "$translation_dir/.venv"
-"$translation_dir/.venv/bin/python" -m pip install --upgrade pip
-"$translation_dir/.venv/bin/python" -m pip install "pdf2zh-next==2.9.0"
+[[ -x "$translation_dir/.venv/bin/python" ]] || "$uv_bin" venv --python "$runtime_python" "$translation_dir/.venv"
+"$uv_bin" pip install --python "$translation_dir/.venv/bin/python" --require-hashes -r "$source_dir/requirements-translation-macos.lock"
+"$uv_bin" pip uninstall --python "$translation_dir/.venv/bin/python" gradio gradio-client gradio-i18n gradio-pdf
+"$uv_bin" pip install --python "$translation_dir/.venv/bin/python" --require-hashes -r "$source_dir/requirements-translation-overrides.lock"
 "$translation_dir/.venv/bin/python" - <<'PY'
 from babeldoc.assets.assets import warmup
+from pdf2zh_next.high_level import do_translate_async_stream  # noqa: F401
 warmup()
 PY
 
@@ -52,6 +70,7 @@ privacy_source="$data_dir/tools/openai-privacy-filter"
 if [[ ! -f "$privacy_source/pyproject.toml" ]]; then
   archive="$data_dir/work/privacy-filter.zip"
   curl -fL "https://github.com/openai/privacy-filter/archive/f7f00ca7fb869683eb732c010299d901457f19c3.zip" -o "$archive"
+  verify_sha256 "$archive" "$privacy_sha256"
   "$runtime_python" - "$archive" "$privacy_source" <<'PY'
 import shutil, sys, tempfile, zipfile
 from pathlib import Path
@@ -63,15 +82,17 @@ with tempfile.TemporaryDirectory() as temporary:
     shutil.copytree(root, destination, dirs_exist_ok=True)
 PY
 fi
-"$runtime_python" -m pip install "$privacy_source"
+"$uv_bin" pip install --python "$runtime_python" --no-deps "$privacy_source"
 
 echo "[5/6] Ollama e modelli di traduzione/OCR"
 ollama_dir="$data_dir/tools/ollama"
 ollama_bin="$ollama_dir/Ollama.app/Contents/Resources/ollama"
 if [[ ! -x "$ollama_bin" ]]; then
   mkdir -p "$ollama_dir"
-  curl -fL "https://ollama.com/download/Ollama-darwin.zip" -o "$data_dir/work/Ollama-darwin.zip"
-  ditto -x -k "$data_dir/work/Ollama-darwin.zip" "$ollama_dir"
+  ollama_archive="$data_dir/work/Ollama-darwin.zip"
+  curl -fL "https://github.com/ollama/ollama/releases/download/$ollama_version/Ollama-darwin.zip" -o "$ollama_archive"
+  verify_sha256 "$ollama_archive" "$ollama_sha256"
+  ditto -x -k "$ollama_archive" "$ollama_dir"
 fi
 export OLLAMA_MODELS="$data_dir/models/ollama"
 mkdir -p "$OLLAMA_MODELS"
