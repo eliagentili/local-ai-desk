@@ -4,6 +4,17 @@
 [![Security](https://github.com/eliagentili/local-ai-desk/actions/workflows/security.yml/badge.svg)](https://github.com/eliagentili/local-ai-desk/actions/workflows/security.yml)
 [![License: AGPL v3+](https://img.shields.io/badge/license-AGPL--3.0--or--later-0a1f29.svg)](LICENSE)
 
+<p align="center">
+  <a href="https://github.com/eliagentili/local-ai-desk/releases/latest/download/Local-AI-Desk-macOS-Apple-Silicon.dmg"><img alt="Scarica per macOS" src="https://img.shields.io/badge/Scarica_per_macOS-Apple_Silicon-000000?style=for-the-badge&amp;logo=apple&amp;logoColor=white"></a>
+  <a href="https://github.com/eliagentili/local-ai-desk/releases/latest/download/Local-AI-Desk-Windows-x64-Setup.exe"><img alt="Scarica per Windows" src="https://img.shields.io/badge/Scarica_per_Windows-x64-0078D4?style=for-the-badge&amp;logo=windows11&amp;logoColor=white"></a>
+</p>
+
+<p align="center">
+  macOS 14+ · Windows 10/11 x64 ·
+  <a href="https://github.com/eliagentili/local-ai-desk/releases/latest">Note dell'ultima versione</a> ·
+  <a href="https://github.com/eliagentili/local-ai-desk/releases/latest/download/SHA256SUMS.txt">Checksum SHA-256</a>
+</p>
+
 Local AI Desk 2 è il nuovo workspace desktop, local-first e open source per
 documenti, PDF, immagini, audio e video. È progettato per macOS Apple Silicon e
 Windows x64, con dati persistenti sul dispositivo e motori installabili a
@@ -44,8 +55,13 @@ presentati come già completi nell’interfaccia.
 
 ## Download e limiti della beta
 
-Scarica l'ultima versione dalla pagina [GitHub Releases](https://github.com/eliagentili/local-ai-desk/releases/latest).
-Sono supportati macOS 14+ su Apple Silicon e Windows 10/11 x64.
+Usa i pulsanti in cima alla pagina oppure questi link diretti, che puntano
+sempre all'ultima versione pubblicata:
+
+- [macOS 14+ Apple Silicon — DMG](https://github.com/eliagentili/local-ai-desk/releases/latest/download/Local-AI-Desk-macOS-Apple-Silicon.dmg)
+- [Windows 10/11 x64 — installer EXE](https://github.com/eliagentili/local-ai-desk/releases/latest/download/Local-AI-Desk-Windows-x64-Setup.exe)
+- [Windows 10/11 x64 — pacchetto MSI](https://github.com/eliagentili/local-ai-desk/releases/latest/download/Local-AI-Desk-Windows-x64.msi)
+- [Tutte le release e note di versione](https://github.com/eliagentili/local-ai-desk/releases)
 
 Ogni release contiene installer, SBOM SPDX e `SHA256SUMS.txt`. Verifica il
 checksum prima di aprire il file. In questa beta:

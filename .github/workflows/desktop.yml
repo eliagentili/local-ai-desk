@@ -124,7 +124,7 @@ jobs:
           upload-release-assets: false
 
   release:
-    name: Publish GitHub prerelease
+    name: Publish GitHub release
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [engine-tests, desktop, sbom]
     runs-on: ubuntu-latest
@@ -150,17 +150,30 @@ jobs:
           mkdir -p release-assets
           while IFS= read -r -d '' asset; do
             asset_name="$(basename "$asset")"
-            release_name="${asset_name// /.}"
+            case "$asset_name" in
+              *.dmg) release_name="Local-AI-Desk-macOS-Apple-Silicon.dmg" ;;
+              *-setup.exe) release_name="Local-AI-Desk-Windows-x64-Setup.exe" ;;
+              *.msi) release_name="Local-AI-Desk-Windows-x64.msi" ;;
+              *.spdx.json) release_name="local-ai-desk-source.spdx.json" ;;
+              *) echo "Unsupported release asset: $asset_name" >&2; exit 1 ;;
+            esac
             cp "$asset" "release-assets/$release_name"
           done < <(find downloaded -type f \( -name '*.dmg' -o -name '*.msi' -o -name '*.exe' -o -name '*.spdx.json' \) -print0)
           test "$(find release-assets -type f | wc -l)" -ge 4
           (cd release-assets && sha256sum -- * > SHA256SUMS.txt)
-      - name: Publish prerelease
+      - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+          notes_file=".github/release-notes/${GITHUB_REF_NAME}.md"
+          if [[ -f "$notes_file" ]]; then
+            notes_args=(--notes-file "$notes_file")
+          else
+            notes_args=(--generate-notes)
+          fi
           gh release create "${GITHUB_REF_NAME}" release-assets/* \
             --verify-tag \
-            --prerelease \
+            --latest \
             --title "Local AI Desk 2 ${GITHUB_REF_NAME#v}" \
-            --notes-file .github/release-notes/v0.3.0-beta.1.md
+            "${notes_args[@]}"
