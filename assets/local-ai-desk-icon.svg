@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="surface" x1="140" y1="110" x2="850" y2="930" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#18323d"/>
+      <stop offset="0.52" stop-color="#0a1820"/>
+      <stop offset="1" stop-color="#061017"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(760 210) rotate(128) scale(560)">
+      <stop stop-color="#c8ff4d" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#c8ff4d" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="shadow" x="24" y="24" width="976" height="992" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="24" stdDeviation="26" flood-color="#071117" flood-opacity="0.34"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#shadow)">
+    <rect x="72" y="56" width="880" height="880" rx="214" fill="url(#surface)"/>
+    <rect x="72" y="56" width="880" height="880" rx="214" fill="url(#glow)"/>
+    <rect x="80" y="64" width="864" height="864" rx="206" fill="none" stroke="#fffdf8" stroke-opacity="0.13" stroke-width="8"/>
+  </g>
+
+  <circle cx="512" cy="496" r="292" fill="#07151c" fill-opacity="0.72" stroke="#c8ff4d" stroke-width="12"/>
+  <circle cx="767" cy="261" r="22" fill="#c8ff4d"/>
+  <path d="M334 817H690" stroke="#c8ff4d" stroke-width="10" stroke-linecap="round" opacity="0.42"/>
+
+  <text x="512" y="555" fill="#c8ff4d" text-anchor="middle"
+        font-family="SFMono-Heavy, SF Mono, Menlo, Monaco, monospace"
+        font-size="194" font-weight="900" letter-spacing="-18">L/06</text>
+  <text x="512" y="872" fill="#fffdf8" fill-opacity="0.78" text-anchor="middle"
+        font-family="Helvetica Neue, Arial, sans-serif"
+        font-size="34" font-weight="700" letter-spacing="12">LOCAL AI</text>
+</svg>

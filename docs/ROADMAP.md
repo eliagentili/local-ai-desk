@@ -1,0 +1,87 @@
+# Roadmap
+
+La roadmap è ordinata per dipendenze: affidabilità e osservabilità vengono prima
+del numero di funzioni. Ogni fase deve poter essere distribuita e testata da
+sola.
+
+## F0 — Foundation desktop
+
+Stato: **in corso**.
+
+- shell Tauri/React e design system;
+- database, libreria, import multiplo e deduplicazione;
+- coda persistente iniziale;
+- diagnostica Mac e rilevamento dei motori v1;
+- documentazione di prodotto, architettura e sicurezza;
+- build macOS riproducibile.
+
+Per chiuderla: test end-to-end dell'import, migrazioni DB versionate, log locale
+redatto e crash recovery di base.
+
+## F1 — Job engine affidabile
+
+- adapter versionato verso i motori esistenti;
+- scheduler resource-aware per CPU, memoria, Metal e termiche;
+- concorrenza per motore e backpressure globale;
+- progresso a eventi per file e per batch;
+- annulla, annulla tutto, pausa, riprendi e retry;
+- risultati atomici e ZIP batch;
+- notifiche native e history dopo riavvio.
+
+Questa fase porta nella v2 tutte le capacità già presenti nella v1 senza
+regressioni.
+
+## F2 — Studio universale
+
+- anteprima PDF, immagine, audio/video e testo;
+- azioni contestuali determinate da formato e intento;
+- confronto prima/dopo e versioni del risultato;
+- OCR con correzione visuale e confidenza;
+- traduzione con glossari, memoria locale e layout preservato;
+- trascrizione con speaker, capitoli, sottotitoli ed editor sincronizzato;
+- esportazioni PDF, DOCX, Markdown, HTML, JSON, SRT e VTT.
+
+## F3 — Libreria e ricerca
+
+- risultati come elementi di prima classe e relazioni tra derivati;
+- collezioni, tag, stelle, note e smart folder;
+- ricerca full-text locale e filtri salvati;
+- ricerca semantica opzionale con embedding locale;
+- duplicati, retention, backup e restore;
+- Quick Look, drag & drop e integrazione Finder/Share Sheet.
+
+## F4 — Workflow e automazioni
+
+- builder visuale con nodi tipizzati;
+- preset condivisibili e versionati;
+- cartelle sorvegliate, regole e pianificazione;
+- variabili, condizioni, fallback e human-in-the-loop;
+- webhook o API locale disattivati per default;
+- log di esecuzione riproducibile e modalità dry-run.
+
+## F5 — Model packs e distribuzione pubblica
+
+- catalogo firmato con licenza, provenienza e dimensione;
+- installazione, verifica checksum, update e rollback;
+- benchmark iniziale sul dispositivo e profili Eco/Bilanciato/Max;
+- onboarding guidato e download selettivo;
+- aggiornamenti firmati dell'app;
+- notarizzazione macOS, SBOM, vulnerability scan e release notes;
+- localizzazioni italiana e inglese complete.
+
+## F6 — Estensioni, dopo la stabilità
+
+- SDK di plugin con permessi dichiarativi e sandbox;
+- integrazioni opzionali con app locali;
+- funzioni cloud opt-in, separate e riconoscibili, solo se utili;
+- pack community con revisione e firma.
+
+## Criteri di rilascio pubblico 1.0
+
+- nessuna perdita o sovrascrittura silenziosa di file;
+- annullamento verificato per ogni motore;
+- recovery dopo force quit e spazio disco esaurito;
+- test su PDF grandi/scansionati, video multi-GB e batch misti;
+- VoiceOver e sola tastiera sui flussi principali;
+- privacy audit, threat model e inventario licenze pubblicati;
+- crash-free rate e tempi di avvio misurati su più configurazioni Apple Silicon.
