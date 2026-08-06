@@ -20,7 +20,7 @@ from backend.app.engines import (
 
 
 class StreamingUploadTests(unittest.TestCase):
-    def test_upload_paths_remain_inside_the_private_job_directory(self):
+    def test_upload_storage_uses_server_owned_names_inside_the_job_directory(self):
         with tempfile.TemporaryDirectory() as raw_dir:
             root = Path(raw_dir)
             for untrusted_name in (
@@ -31,9 +31,17 @@ class StreamingUploadTests(unittest.TestCase):
                 "video grande.mp4",
             ):
                 with self.subTest(filename=untrusted_name):
-                    candidate = main.safe_upload_path(root, untrusted_name)
+                    candidate = main.upload_storage_path(root, untrusted_name)
                     self.assertEqual(candidate.parent, root.resolve())
                     self.assertNotIn(candidate.name, {"", ".", ".."})
+                    self.assertNotIn("outside", candidate.name)
+
+            self.assertEqual(
+                main.upload_storage_path(root, "video.mp4").suffix, ".mp4"
+            )
+            self.assertEqual(
+                main.upload_storage_path(root, "payload.unknown").suffix, ".bin"
+            )
 
     def test_raw_upload_is_streamed_and_processed(self):
         client = TestClient(main.app)

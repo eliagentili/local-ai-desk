@@ -65,6 +65,55 @@ TRANSLATION_LANGUAGES = {
     "ar", "zh-CN", "ja", "ko", "hi", "tr",
 }
 TRANSLATION_MODES = {"translated", "bilingual"}
+UPLOAD_SUFFIXES = {
+    ".aac": ".aac",
+    ".avi": ".avi",
+    ".bmp": ".bmp",
+    ".csv": ".csv",
+    ".doc": ".doc",
+    ".docx": ".docx",
+    ".eml": ".eml",
+    ".epub": ".epub",
+    ".flac": ".flac",
+    ".gif": ".gif",
+    ".htm": ".htm",
+    ".html": ".html",
+    ".jpeg": ".jpeg",
+    ".jpg": ".jpg",
+    ".json": ".json",
+    ".log": ".log",
+    ".m4a": ".m4a",
+    ".m4v": ".m4v",
+    ".md": ".md",
+    ".mkv": ".mkv",
+    ".mov": ".mov",
+    ".mp3": ".mp3",
+    ".mp4": ".mp4",
+    ".msg": ".msg",
+    ".odp": ".odp",
+    ".ods": ".ods",
+    ".odt": ".odt",
+    ".ogg": ".ogg",
+    ".pdf": ".pdf",
+    ".png": ".png",
+    ".ppt": ".ppt",
+    ".pptx": ".pptx",
+    ".rtf": ".rtf",
+    ".tif": ".tif",
+    ".tiff": ".tiff",
+    ".toml": ".toml",
+    ".tsv": ".tsv",
+    ".txt": ".txt",
+    ".wav": ".wav",
+    ".webm": ".webm",
+    ".webp": ".webp",
+    ".xls": ".xls",
+    ".xlsx": ".xlsx",
+    ".xml": ".xml",
+    ".yaml": ".yaml",
+    ".yml": ".yml",
+    ".zip": ".zip",
+}
 LAUNCHER_PID_FILE = WORK_DIR / "local-ai-desk.pid"
 
 _JOB_EVENTS: dict[str, threading.Event] = {}
@@ -96,13 +145,11 @@ def safe_name(name: str) -> str:
     return "input.bin" if cleaned in {"", ".", ".."} else cleaned
 
 
-def safe_upload_path(directory: Path, filename: str) -> Path:
-    """Return a normalized upload path contained by the private job directory."""
-    safe_root = os.path.realpath(directory) + os.sep
-    candidate = os.path.realpath(os.path.join(safe_root, safe_name(filename)))
-    if not os.path.normcase(candidate).startswith(os.path.normcase(safe_root)):
-        raise HTTPException(400, "Nome del file non valido.")
-    return Path(candidate)
+def upload_storage_path(directory: Path, filename: str) -> Path:
+    """Create a server-owned path without copying user input into the path."""
+    requested_suffix = Path(filename).suffix.lower()
+    storage_suffix = UPLOAD_SUFFIXES.get(requested_suffix, ".bin")
+    return directory.resolve() / f"{uuid4().hex}{storage_suffix}"
 
 
 def extension_for(output_format: str) -> str:
@@ -282,9 +329,10 @@ async def translate_streamed_pdf(
         if content_length and content_length.isdigit():
             validate_size(int(content_length))
 
-        source = safe_upload_path(job_dir, filename)
-        if source.suffix.lower() != ".pdf":
+        source_name = safe_name(filename)
+        if Path(source_name).suffix.lower() != ".pdf":
             raise HTTPException(400, "Seleziona un file PDF.")
+        source = upload_storage_path(job_dir, "document.pdf")
         size = 0
         expected_size = (
             int(content_length)
@@ -353,6 +401,10 @@ async def translate_streamed_pdf(
             mode,
             cancel_event,
             report_translation_progress,
+        )
+        result.filename = (
+            f"{Path(source_name).stem}.{target_language}."
+            f"{'tradotto' if mode == 'translated' else 'bilingue'}.pdf"
         )
         elapsed = time.perf_counter() - started
         update_job_progress(
@@ -431,8 +483,9 @@ async def process_streamed_file(
         if content_length and content_length.isdigit():
             validate_size(int(content_length))
 
+        source_name = safe_name(filename)
         with tempfile.TemporaryDirectory(prefix="job-", dir=JOBS_DIR) as raw_job:
-            source = safe_upload_path(Path(raw_job), filename)
+            source = upload_storage_path(Path(raw_job), filename)
             size = 0
             with source.open("wb") as destination:
                 async for chunk in request.stream():
@@ -454,7 +507,9 @@ async def process_streamed_file(
             )
             result.meta.setdefault("input_bytes", size)
             result.meta.setdefault("streamed_upload", True)
-            return response_payload(result, source.stem, output_format, started)
+            return response_payload(
+                result, Path(source_name).stem, output_format, started
+            )
     except HTTPException:
         raise
     except ClientDisconnect as exc:
@@ -493,8 +548,9 @@ async def process(
             stem = "testo-protetto"
         else:
             assert file is not None
+            source_name = safe_name(file.filename or "input.bin")
             with tempfile.TemporaryDirectory(prefix="job-", dir=JOBS_DIR) as raw_job:
-                source = safe_upload_path(
+                source = upload_storage_path(
                     Path(raw_job), file.filename or "input.bin"
                 )
                 size = 0
@@ -512,7 +568,7 @@ async def process(
                     language,
                     cancel_event,
                 )
-                stem = source.stem
+                stem = Path(source_name).stem
         return response_payload(result, stem, output_format, started)
     except HTTPException:
         raise
