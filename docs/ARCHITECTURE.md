@@ -20,29 +20,34 @@ Tauri / Rust core
 La UI non deve conoscere processi Python, porte o cartelle dei modelli. Il core
 espone comandi di dominio e normalizza ogni motore dietro un contratto comune.
 
-## Foundation corrente
+## Core corrente
 
-Il database contiene tre insiemi:
+Il database contiene quattro insiemi:
 
 - `library_items`: riferimenti ai file originali, tipo, dimensione e hash;
 - `jobs`: workflow, stato, avanzamento, fase, output ed errore;
+- `job_events`: transizioni persistenti della coda;
 - `settings`: preferenze versionabili.
 
 I file non vengono copiati durante l'importazione. L'hash viene calcolato con
 buffer da 8 MB, quindi il costo di memoria resta limitato anche per video da
 diversi GB. Le operazioni di disco girano fuori dal thread UI.
 
-## Ponte di migrazione
+## Adapter di esecuzione 0.2
 
-La Foundation interroga esclusivamente
-`http://127.0.0.1:8787/api/status` con timeout breve. Non accetta URL scelti
-dall'utente e non concede al frontend permessi HTTP. Questo ponte serve a
-osservare i motori della v1 senza modificare o interrompere la vecchia app.
+Il core Rust interroga ed esegue lavori esclusivamente su
+`http://127.0.0.1:8787`, con timeout e URL non configurabile dall’interfaccia.
+I file vengono letti dal disco e inviati in streaming con `Content-Length`, senza
+essere caricati interamente in RAM. Il frontend non possiede permessi HTTP.
 
-Il passo successivo sostituirà il semplice health check con un adapter di job
-versionato. In seguito ogni motore verrà spostato in un worker gestito dalla v2.
+Lo scheduler v2 applica backpressure globale con tre slot; i worker v1
+continuano ad applicare i limiti più restrittivi per singolo motore. Traduzione
+PDF espone pagine, parti e fasi reali; per i motori che non espongono unità di
+lavoro la UI mostra correttamente un avanzamento indeterminato. Gli output sono
+scritti dentro il contenitore dell’app e i PDF usano un file parziale rinominato
+solo a completamento.
 
-## Contratto futuro dei job
+## Contratto dei job
 
 Stati ammessi:
 

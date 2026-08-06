@@ -1,13 +1,23 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::{atomic::AtomicBool, Arc, Mutex},
+};
 
+use chrono::Utc;
 use rusqlite::{params, Connection};
+use tokio::sync::Semaphore;
 
-use crate::models::{Job, LibraryItem};
+use crate::models::{Job, JobSpec, LibraryItem};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AppState {
     pub database_path: PathBuf,
     pub data_dir: PathBuf,
+    pub results_dir: PathBuf,
+    pub downloads_dir: PathBuf,
+    pub scheduler: Arc<Semaphore>,
+    pub cancellations: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
 }
 
 fn connect(path: &Path) -> rusqlite::Result<Connection> {
@@ -16,6 +26,24 @@ fn connect(path: &Path) -> rusqlite::Result<Connection> {
     connection.pragma_update(None, "journal_mode", "WAL")?;
     connection.busy_timeout(std::time::Duration::from_secs(5))?;
     Ok(connection)
+}
+
+fn ensure_column(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+    declaration: &str,
+) -> rusqlite::Result<()> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if !columns.iter().any(|known| known == column) {
+        connection.execute_batch(&format!(
+            "ALTER TABLE {table} ADD COLUMN {column} {declaration}"
+        ))?;
+    }
+    Ok(())
 }
 
 pub fn initialize(path: &Path) -> rusqlite::Result<()> {
@@ -36,17 +64,43 @@ pub fn initialize(path: &Path) -> rusqlite::Result<()> {
 
         CREATE TABLE IF NOT EXISTS jobs (
           id TEXT PRIMARY KEY,
+          batch_id TEXT,
           library_item_id TEXT,
           input_name TEXT NOT NULL,
           workflow TEXT NOT NULL,
+          tool TEXT NOT NULL DEFAULT 'auto',
+          output_format TEXT NOT NULL DEFAULT 'markdown',
+          language TEXT NOT NULL DEFAULT 'auto',
+          source_language TEXT NOT NULL DEFAULT 'en',
+          target_language TEXT NOT NULL DEFAULT 'it',
+          translation_mode TEXT NOT NULL DEFAULT 'translated',
           status TEXT NOT NULL,
           progress REAL NOT NULL DEFAULT 0,
           stage TEXT NOT NULL,
+          stage_current INTEGER NOT NULL DEFAULT 0,
+          stage_total INTEGER NOT NULL DEFAULT 0,
+          part_index INTEGER NOT NULL DEFAULT 1,
+          total_parts INTEGER NOT NULL DEFAULT 1,
           output_path TEXT,
+          output_name TEXT,
+          output_mime TEXT,
+          engine TEXT,
+          elapsed_seconds REAL,
           error TEXT,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
           FOREIGN KEY(library_item_id) REFERENCES library_items(id) ON DELETE SET NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS job_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          job_id TEXT NOT NULL,
+          status TEXT NOT NULL,
+          progress REAL NOT NULL,
+          stage TEXT NOT NULL,
+          message TEXT,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS settings (
@@ -58,7 +112,45 @@ pub fn initialize(path: &Path) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_library_added_at ON library_items(added_at DESC);
         CREATE INDEX IF NOT EXISTS idx_jobs_updated_at ON jobs(updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+        CREATE INDEX IF NOT EXISTS idx_job_events_job ON job_events(job_id, id);
         ",
+    )?;
+
+    for (column, declaration) in [
+        ("batch_id", "TEXT"),
+        ("tool", "TEXT NOT NULL DEFAULT 'auto'"),
+        ("output_format", "TEXT NOT NULL DEFAULT 'markdown'"),
+        ("language", "TEXT NOT NULL DEFAULT 'auto'"),
+        ("source_language", "TEXT NOT NULL DEFAULT 'en'"),
+        ("target_language", "TEXT NOT NULL DEFAULT 'it'"),
+        ("translation_mode", "TEXT NOT NULL DEFAULT 'translated'"),
+        ("stage_current", "INTEGER NOT NULL DEFAULT 0"),
+        ("stage_total", "INTEGER NOT NULL DEFAULT 0"),
+        ("part_index", "INTEGER NOT NULL DEFAULT 1"),
+        ("total_parts", "INTEGER NOT NULL DEFAULT 1"),
+        ("output_name", "TEXT"),
+        ("output_mime", "TEXT"),
+        ("engine", "TEXT"),
+        ("elapsed_seconds", "REAL"),
+    ] {
+        ensure_column(&connection, "jobs", column, declaration)?;
+    }
+
+    // Foundation databases do not have batch_id until the migration above.
+    // Build its index only after the column is guaranteed to exist.
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_jobs_batch ON jobs(batch_id)",
+        [],
+    )?;
+
+    let now = Utc::now().to_rfc3339();
+    connection.execute(
+        "UPDATE jobs
+         SET status = 'interrupted', progress = 0, stage = 'Interrotto dal riavvio',
+             error = 'Il lavoro era attivo quando l’app è stata chiusa. Puoi avviarlo di nuovo.',
+             updated_at = ?1
+         WHERE status IN ('queued', 'preparing', 'uploading', 'running', 'finalizing', 'cancelling')",
+        params![now],
     )?;
     Ok(())
 }
@@ -77,10 +169,9 @@ pub fn insert_library_item(
     database_path: &Path,
     item: &NewLibraryItem<'_>,
 ) -> rusqlite::Result<bool> {
-    let mut connection = connect(database_path)?;
-    let transaction = connection.transaction()?;
+    let connection = connect(database_path)?;
     let size_bytes = i64::try_from(item.size_bytes).unwrap_or(i64::MAX);
-    let inserted = transaction.execute(
+    let inserted = connection.execute(
         "INSERT OR IGNORE INTO library_items
          (id, name, path, kind, size_bytes, content_hash, status, added_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'ready', ?7, ?7)",
@@ -94,18 +185,21 @@ pub fn insert_library_item(
             item.now,
         ],
     )? > 0;
-
-    if inserted {
-        transaction.execute(
-            "INSERT INTO jobs
-             (id, library_item_id, input_name, workflow, status, progress, stage, created_at, updated_at)
-             VALUES (?1, ?2, ?3, 'auto', 'draft', 0, 'Scegli un’azione', ?4, ?4)",
-            params![uuid::Uuid::new_v4().to_string(), item.id, item.name, item.now],
-        )?;
-    }
-
-    transaction.commit()?;
     Ok(inserted)
+}
+
+fn map_library_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<LibraryItem> {
+    Ok(LibraryItem {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        path: row.get(2)?,
+        kind: row.get(3)?,
+        size_bytes: row.get::<_, i64>(4)?.max(0) as u64,
+        content_hash: row.get(5)?,
+        status: row.get(6)?,
+        added_at: row.get(7)?,
+        updated_at: row.get(8)?,
+    })
 }
 
 pub fn list_library(database_path: &Path) -> rusqlite::Result<Vec<LibraryItem>> {
@@ -114,53 +208,227 @@ pub fn list_library(database_path: &Path) -> rusqlite::Result<Vec<LibraryItem>> 
         "SELECT id, name, path, kind, size_bytes, content_hash, status, added_at, updated_at
          FROM library_items ORDER BY added_at DESC",
     )?;
-    let rows = statement.query_map([], |row| {
-        Ok(LibraryItem {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            path: row.get(2)?,
-            kind: row.get(3)?,
-            size_bytes: row.get::<_, i64>(4)?.max(0) as u64,
-            content_hash: row.get(5)?,
-            status: row.get(6)?,
-            added_at: row.get(7)?,
-            updated_at: row.get(8)?,
-        })
-    })?;
+    let rows = statement.query_map([], map_library_item)?;
     rows.collect()
 }
 
-pub fn list_jobs(database_path: &Path) -> rusqlite::Result<Vec<Job>> {
+pub fn library_items_by_ids(
+    database_path: &Path,
+    ids: &[String],
+) -> rusqlite::Result<Vec<LibraryItem>> {
     let connection = connect(database_path)?;
     let mut statement = connection.prepare(
-        "SELECT id, library_item_id, input_name, workflow, status, progress, stage,
-                output_path, error, created_at, updated_at
-         FROM jobs ORDER BY updated_at DESC",
+        "SELECT id, name, path, kind, size_bytes, content_hash, status, added_at, updated_at
+         FROM library_items WHERE id = ?1",
     )?;
-    let rows = statement.query_map([], |row| {
-        Ok(Job {
-            id: row.get(0)?,
-            library_item_id: row.get(1)?,
-            input_name: row.get(2)?,
-            workflow: row.get(3)?,
-            status: row.get(4)?,
-            progress: row.get(5)?,
-            stage: row.get(6)?,
-            output_path: row.get(7)?,
-            error: row.get(8)?,
-            created_at: row.get(9)?,
-            updated_at: row.get(10)?,
-        })
-    })?;
+    ids.iter()
+        .map(|id| statement.query_row(params![id], map_library_item))
+        .collect()
+}
+
+fn map_job(row: &rusqlite::Row<'_>) -> rusqlite::Result<Job> {
+    Ok(Job {
+        id: row.get(0)?,
+        batch_id: row.get(1)?,
+        library_item_id: row.get(2)?,
+        input_name: row.get(3)?,
+        workflow: row.get(4)?,
+        tool: row.get(5)?,
+        output_format: row.get(6)?,
+        language: row.get(7)?,
+        source_language: row.get(8)?,
+        target_language: row.get(9)?,
+        translation_mode: row.get(10)?,
+        status: row.get(11)?,
+        progress: row.get(12)?,
+        stage: row.get(13)?,
+        stage_current: row.get::<_, i64>(14)?.max(0) as u64,
+        stage_total: row.get::<_, i64>(15)?.max(0) as u64,
+        part_index: row.get::<_, i64>(16)?.max(1) as u32,
+        total_parts: row.get::<_, i64>(17)?.max(1) as u32,
+        output_path: row.get(18)?,
+        output_name: row.get(19)?,
+        output_mime: row.get(20)?,
+        engine: row.get(21)?,
+        elapsed_seconds: row.get(22)?,
+        error: row.get(23)?,
+        created_at: row.get(24)?,
+        updated_at: row.get(25)?,
+    })
+}
+
+const JOB_SELECT: &str =
+    "SELECT id, batch_id, library_item_id, input_name, workflow, tool, output_format,
+            language, source_language, target_language, translation_mode, status,
+            progress, stage, stage_current, stage_total, part_index, total_parts,
+            output_path, output_name, output_mime, engine, elapsed_seconds, error,
+            created_at, updated_at FROM jobs";
+
+pub fn list_jobs(database_path: &Path) -> rusqlite::Result<Vec<Job>> {
+    let connection = connect(database_path)?;
+    let mut statement = connection.prepare(&format!("{JOB_SELECT} ORDER BY updated_at DESC"))?;
+    let rows = statement.query_map([], map_job)?;
     rows.collect()
+}
+
+pub fn jobs_by_ids(database_path: &Path, ids: &[String]) -> rusqlite::Result<Vec<Job>> {
+    let connection = connect(database_path)?;
+    let mut statement = connection.prepare(&format!("{JOB_SELECT} WHERE id = ?1"))?;
+    ids.iter()
+        .map(|id| statement.query_row(params![id], map_job))
+        .collect()
+}
+
+fn insert_job_in_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    spec: &JobSpec,
+    now: &str,
+) -> rusqlite::Result<()> {
+    transaction.execute(
+        "INSERT INTO jobs
+         (id, batch_id, library_item_id, input_name, workflow, tool, output_format,
+          language, source_language, target_language, translation_mode, status,
+          progress, stage, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+                 'queued', 0, 'In coda', ?12, ?12)",
+        params![
+            spec.id,
+            spec.batch_id,
+            spec.item.id,
+            spec.item.name,
+            spec.options.intent,
+            spec.tool,
+            spec.options.output_format,
+            spec.options.language,
+            spec.options.source_language,
+            spec.options.target_language,
+            spec.options.translation_mode,
+            now,
+        ],
+    )?;
+    transaction.execute(
+        "INSERT INTO job_events (job_id, status, progress, stage, created_at)
+         VALUES (?1, 'queued', 0, 'In coda', ?2)",
+        params![spec.id, now],
+    )?;
+    Ok(())
+}
+
+pub fn insert_jobs(database_path: &Path, specs: &[JobSpec]) -> rusqlite::Result<()> {
+    let mut connection = connect(database_path)?;
+    let transaction = connection.transaction()?;
+    let now = Utc::now().to_rfc3339();
+    for spec in specs {
+        insert_job_in_transaction(&transaction, spec, &now)?;
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
+#[cfg(test)]
+fn insert_job(database_path: &Path, spec: &JobSpec) -> rusqlite::Result<()> {
+    insert_jobs(database_path, std::slice::from_ref(spec))
+}
+
+#[derive(Debug, Clone)]
+pub struct ProgressUpdate<'a> {
+    pub status: &'a str,
+    pub progress: f64,
+    pub stage: &'a str,
+    pub stage_current: u64,
+    pub stage_total: u64,
+    pub part_index: u32,
+    pub total_parts: u32,
+    pub message: Option<&'a str>,
+}
+
+pub fn update_job_progress(
+    database_path: &Path,
+    job_id: &str,
+    update: &ProgressUpdate<'_>,
+) -> rusqlite::Result<()> {
+    let mut connection = connect(database_path)?;
+    let transaction = connection.transaction()?;
+    let now = Utc::now().to_rfc3339();
+    transaction.execute(
+        "UPDATE jobs SET status = ?2, progress = ?3, stage = ?4,
+         stage_current = ?5, stage_total = ?6, part_index = ?7, total_parts = ?8,
+         error = ?9, updated_at = ?10 WHERE id = ?1",
+        params![
+            job_id,
+            update.status,
+            update.progress.clamp(0.0, 100.0),
+            update.stage,
+            i64::try_from(update.stage_current).unwrap_or(i64::MAX),
+            i64::try_from(update.stage_total).unwrap_or(i64::MAX),
+            update.part_index,
+            update.total_parts,
+            update.message,
+            now,
+        ],
+    )?;
+    transaction.execute(
+        "INSERT INTO job_events (job_id, status, progress, stage, message, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            job_id,
+            update.status,
+            update.progress.clamp(0.0, 100.0),
+            update.stage,
+            update.message,
+            now,
+        ],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+pub struct CompletedJob<'a> {
+    pub output_path: &'a str,
+    pub output_name: &'a str,
+    pub output_mime: &'a str,
+    pub engine: &'a str,
+    pub elapsed_seconds: f64,
+}
+
+pub fn complete_job(
+    database_path: &Path,
+    job_id: &str,
+    completed: &CompletedJob<'_>,
+) -> rusqlite::Result<()> {
+    let mut connection = connect(database_path)?;
+    let transaction = connection.transaction()?;
+    let now = Utc::now().to_rfc3339();
+    transaction.execute(
+        "UPDATE jobs SET status = 'completed', progress = 100, stage = 'Risultato pronto',
+         output_path = ?2, output_name = ?3, output_mime = ?4, engine = ?5,
+         elapsed_seconds = ?6, error = NULL, updated_at = ?7 WHERE id = ?1",
+        params![
+            job_id,
+            completed.output_path,
+            completed.output_name,
+            completed.output_mime,
+            completed.engine,
+            completed.elapsed_seconds,
+            now,
+        ],
+    )?;
+    transaction.execute(
+        "INSERT INTO job_events (job_id, status, progress, stage, created_at)
+         VALUES (?1, 'completed', 100, 'Risultato pronto', ?2)",
+        params![job_id, now],
+    )?;
+    transaction.commit()?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::WorkflowOptions;
 
     #[test]
-    fn schema_persists_library_items_and_draft_jobs() {
+    fn schema_persists_library_and_job_lifecycle() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let path = temporary.path().join("test.sqlite3");
         initialize(&path).expect("schema");
@@ -174,13 +442,99 @@ mod tests {
             content_hash: "hash-1",
             now: "2026-08-06T10:00:00Z",
         };
-
         assert!(insert_library_item(&path, &item).expect("first insert"));
         assert!(!insert_library_item(&path, &item).expect("duplicate insert"));
-        assert_eq!(list_library(&path).expect("library").len(), 1);
+        assert!(list_jobs(&path).expect("jobs before start").is_empty());
+
+        let library_item = list_library(&path).expect("library").remove(0);
+        let spec = JobSpec {
+            id: "job-1".to_string(),
+            batch_id: "batch-1".to_string(),
+            item: library_item,
+            options: WorkflowOptions::default(),
+            tool: "auto".to_string(),
+        };
+        insert_job(&path, &spec).expect("insert job");
+        update_job_progress(
+            &path,
+            "job-1",
+            &ProgressUpdate {
+                status: "running",
+                progress: 10.0,
+                stage: "Elaborazione locale",
+                stage_current: 0,
+                stage_total: 0,
+                part_index: 1,
+                total_parts: 1,
+                message: None,
+            },
+        )
+        .expect("progress");
+        let output = temporary.path().join("result.md");
+        complete_job(
+            &path,
+            "job-1",
+            &CompletedJob {
+                output_path: &output.to_string_lossy(),
+                output_name: "result.md",
+                output_mime: "text/markdown",
+                engine: "test-engine",
+                elapsed_seconds: 1.5,
+            },
+        )
+        .expect("complete");
 
         let jobs = list_jobs(&path).expect("jobs");
         assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].status, "completed");
+        assert_eq!(jobs[0].engine.as_deref(), Some("test-engine"));
+    }
+
+    #[test]
+    fn migrates_foundation_database_before_building_batch_index() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let path = temporary.path().join("foundation.sqlite3");
+        let legacy = Connection::open(&path).expect("legacy connection");
+        legacy
+            .execute_batch(
+                "
+                CREATE TABLE library_items (
+                  id TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL,
+                  kind TEXT NOT NULL, size_bytes INTEGER NOT NULL,
+                  content_hash TEXT NOT NULL UNIQUE, status TEXT NOT NULL,
+                  added_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE TABLE jobs (
+                  id TEXT PRIMARY KEY, library_item_id TEXT, input_name TEXT NOT NULL,
+                  workflow TEXT NOT NULL, status TEXT NOT NULL,
+                  progress REAL NOT NULL DEFAULT 0, stage TEXT NOT NULL,
+                  output_path TEXT, error TEXT, created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL
+                );
+                INSERT INTO jobs
+                  (id, input_name, workflow, status, progress, stage, created_at, updated_at)
+                VALUES
+                  ('draft-1', 'prima.pdf', 'auto', 'draft', 0, 'Scegli un’azione',
+                   '2026-08-01T10:00:00Z', '2026-08-01T10:00:00Z');
+                ",
+            )
+            .expect("foundation schema");
+        drop(legacy);
+
+        initialize(&path).expect("migration");
+        let jobs = list_jobs(&path).expect("migrated jobs");
+        assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].status, "draft");
+        assert_eq!(jobs[0].tool, "auto");
+
+        let connection = Connection::open(path).expect("migrated connection");
+        let indexed: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_jobs_batch'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("batch index");
+        assert_eq!(indexed, 1);
     }
 }

@@ -1,21 +1,14 @@
-import { ArrowUpRight, Blocks, Route, SlidersHorizontal } from "lucide-react";
+import { ArrowUpRight, Blocks, Route } from "lucide-react";
 
 import type { AppSnapshot, SectionId } from "../types";
 
 interface PlaceholderViewProps {
-  section: Exclude<SectionId, "home" | "library" | "activity" | "models">;
+  section: Exclude<SectionId, "home" | "library" | "studio" | "activity" | "models">;
   snapshot: AppSnapshot;
   onNavigate: (section: SectionId) => void;
 }
 
 const copy = {
-  studio: {
-    eyebrow: "Fase successiva",
-    title: "Un’unica tela per creare.",
-    description:
-      "Studio unirà anteprima, istruzioni, risultati e confronto in una superficie coerente per documenti, traduzioni e trascrizioni.",
-    icon: SlidersHorizontal,
-  },
   workflows: {
     eyebrow: "Automazione locale",
     title: "Dai file al risultato, senza babysitting.",

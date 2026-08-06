@@ -8,23 +8,30 @@ Questa cartella è intenzionalmente separata da `Local-AI-Desk`: la versione 1
 rimane installata e funzionante mentre le funzioni vengono migrate e verificate
 una alla volta.
 
-![Home della Foundation 2.0](docs/screenshots/foundation-home.png)
+![Home di Local AI Desk 2](docs/screenshots/f1-installed-window.png)
 
-## Stato della Foundation
+![Coda con risultato completato](docs/screenshots/f1-activity-completed.png)
+
+## Stato della versione 0.2
 
 - shell desktop nativa con Tauri 2 e React 19;
 - libreria SQLite persistente nel contenitore dell'app;
 - importazione multipla tramite selettore nativo macOS;
 - nessun limite artificiale alla dimensione dei file;
 - hash BLAKE3 in streaming per deduplicare senza caricare file enormi in RAM;
-- coda persistente con lavori in bozza;
-- rilevamento dei motori della v1 tramite un endpoint fisso su `127.0.0.1`;
+- Studio guidato per Auto, traduzione PDF, OCR, trascrizione e Privacy Shield;
+- coda persistente con scheduler globale fino a tre lavori concorrenti;
+- upload in streaming senza limite artificiale a 500 MB;
+- progresso reale quando esposto dal motore e fase indeterminata negli altri casi;
+- annullamento per lavoro o per l’intero batch;
+- risultati salvati atomicamente e ZIP finale con manifest JSON;
+- adapter locale verso i sette motori già installati, su `127.0.0.1`;
 - CSP restrittiva e un solo permesso frontend: apertura del selettore file;
 - interfaccia accessibile, responsive, chiara anche in dark mode.
 
-Studio, workflow, esecuzione dei job, progresso e gestione dei model pack sono
-tracciati nella [roadmap](docs/ROADMAP.md) e non vengono presentati come già
-completi nell'interfaccia.
+Pausa/ripresa, retry, notifiche, preview/editor, workflow e gestione autonoma dei
+model pack restano tracciati nella [roadmap](docs/ROADMAP.md) e non vengono
+presentati come già completi nell’interfaccia.
 
 ## Sviluppo
 

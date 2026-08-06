@@ -10,8 +10,27 @@ import { LibraryView } from "./components/LibraryView";
 import { ModelsView } from "./components/ModelsView";
 import { PlaceholderView } from "./components/PlaceholderView";
 import { Sidebar } from "./components/Sidebar";
+import { StudioView } from "./components/StudioView";
 import { Topbar } from "./components/Topbar";
-import type { AppSnapshot, ImportReport, SectionId } from "./types";
+import type {
+  AppSnapshot,
+  BridgeStatus,
+  ExportReport,
+  ImportReport,
+  Job,
+  SectionId,
+  StartJobsReport,
+  WorkflowOptions,
+} from "./types";
+
+const activeJobStates = new Set([
+  "queued",
+  "preparing",
+  "uploading",
+  "running",
+  "finalizing",
+  "cancelling",
+]);
 
 const emptySnapshot: AppSnapshot = {
   library: [],
@@ -21,6 +40,7 @@ const emptySnapshot: AppSnapshot = {
     localOnly: true,
     readyEngines: 0,
     totalEngines: 0,
+    batchParallelism: 3,
     label: "Verifica motori…",
     engines: [],
   },
@@ -44,6 +64,7 @@ function App() {
   const [snapshot, setSnapshot] = useState<AppSnapshot>(emptySnapshot);
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
 
   useEffect(() => {
@@ -84,6 +105,41 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!isTauri()) return;
+    let stopped = false;
+    const refreshBridge = () => {
+      void invoke<BridgeStatus>("get_bridge_status")
+        .then((bridge) => {
+          if (!stopped) setSnapshot((current) => ({ ...current, bridge }));
+        })
+        .catch(() => undefined);
+    };
+    const timer = window.setInterval(refreshBridge, 4_000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  const hasActiveJobs = snapshot.jobs.some((job) => activeJobStates.has(job.status));
+
+  useEffect(() => {
+    if (!isTauri() || !hasActiveJobs) return;
+    let stopped = false;
+    const timer = window.setInterval(() => {
+      void invoke<Job[]>("list_jobs")
+        .then((jobs) => {
+          if (!stopped) setSnapshot((current) => ({ ...current, jobs }));
+        })
+        .catch(() => undefined);
+    }, 700);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [hasActiveJobs]);
+
   async function handleImport() {
     if (!isTauri() || importing) return;
     setNotice(null);
@@ -123,6 +179,75 @@ function App() {
     }
   }
 
+  async function handleStart(itemIds: string[], options: WorkflowOptions) {
+    if (!isTauri() || starting) return;
+    setStarting(true);
+    setNotice(null);
+    try {
+      const report = await invoke<StartJobsReport>("start_jobs", { itemIds, options });
+      setSnapshot(report.snapshot);
+      setNotice({
+        tone: "success",
+        title: "Batch avviato",
+        detail: `${report.jobIds.length} ${report.jobIds.length === 1 ? "lavoro" : "lavori"} affidati allo scheduler locale`,
+      });
+      setActive("activity");
+    } catch (error) {
+      setNotice({ tone: "error", title: "Avvio non riuscito", detail: String(error) });
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  async function refreshJobs() {
+    const jobs = await invoke<Job[]>("list_jobs");
+    setSnapshot((current) => ({ ...current, jobs }));
+  }
+
+  async function handleCancel(jobId: string) {
+    try {
+      await invoke<boolean>("cancel_job", { jobId });
+      await refreshJobs();
+    } catch (error) {
+      setNotice({ tone: "error", title: "Annullamento non riuscito", detail: String(error) });
+    }
+  }
+
+  async function handleCancelAll() {
+    try {
+      const count = await invoke<number>("cancel_all_jobs");
+      await refreshJobs();
+      setNotice({
+        tone: "success",
+        title: "Annullamento richiesto",
+        detail: `${count} ${count === 1 ? "lavoro attivo" : "lavori attivi"}`,
+      });
+    } catch (error) {
+      setNotice({ tone: "error", title: "Annullamento non riuscito", detail: String(error) });
+    }
+  }
+
+  async function handleExport(jobIds: string[]) {
+    try {
+      const report = await invoke<ExportReport>("export_results", { jobIds });
+      setNotice({
+        tone: "success",
+        title: "ZIP creato in Download",
+        detail: `${report.filename} · ${report.fileCount} risultati`,
+      });
+    } catch (error) {
+      setNotice({ tone: "error", title: "Esportazione non riuscita", detail: String(error) });
+    }
+  }
+
+  async function handleReveal(jobId: string) {
+    try {
+      await invoke("reveal_job_result", { jobId });
+    } catch (error) {
+      setNotice({ tone: "error", title: "Risultato non disponibile", detail: String(error) });
+    }
+  }
+
   function renderView() {
     if (active === "home") {
       return (
@@ -136,14 +261,39 @@ function App() {
     if (active === "library") {
       return <LibraryView items={snapshot.library} onImport={() => void handleImport()} />;
     }
-    if (active === "activity") return <ActivityView jobs={snapshot.jobs} />;
+    if (active === "studio") {
+      return (
+        <StudioView
+          bridge={snapshot.bridge}
+          items={snapshot.library}
+          onImport={() => void handleImport()}
+          onStart={(itemIds, options) => void handleStart(itemIds, options)}
+          starting={starting}
+        />
+      );
+    }
+    if (active === "activity") {
+      return (
+        <ActivityView
+          jobs={snapshot.jobs}
+          onCancel={(jobId) => void handleCancel(jobId)}
+          onCancelAll={() => void handleCancelAll()}
+          onExport={(jobIds) => void handleExport(jobIds)}
+          onReveal={(jobId) => void handleReveal(jobId)}
+        />
+      );
+    }
     if (active === "models") return <ModelsView bridge={snapshot.bridge} />;
     return <PlaceholderView onNavigate={setActive} section={active} snapshot={snapshot} />;
   }
 
   return (
     <div className="app-shell">
-      <Sidebar active={active} jobCount={snapshot.jobs.length} onNavigate={setActive} />
+      <Sidebar
+        active={active}
+        jobCount={snapshot.jobs.filter((job) => activeJobStates.has(job.status)).length}
+        onNavigate={setActive}
+      />
       <div className="workspace">
         <Topbar
           active={active}

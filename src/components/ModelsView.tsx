@@ -11,8 +11,8 @@ export function ModelsView({ bridge }: { bridge: BridgeStatus }) {
           <span className="eyebrow">Runtime locale</span>
           <h2>Un catalogo, più motori.</h2>
           <p>
-            La Foundation rileva oggi i motori della suite precedente. La prossima
-            fase li convertirà in pacchetti installabili, aggiornabili e verificabili.
+            La versione 0.2 usa già i motori locali installati. La fase successiva
+            li convertirà in pacchetti autonomi, aggiornabili e verificabili.
           </p>
         </div>
         <span className="large-status" data-ready={bridge.available}>

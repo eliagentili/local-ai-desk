@@ -16,8 +16,10 @@ interface DashboardProps {
 }
 
 export function Dashboard({ snapshot, onImport, onNavigate }: DashboardProps) {
-  const pendingJobs = snapshot.jobs.filter(
-    (job) => job.status !== "completed" && job.status !== "cancelled",
+  const pendingJobs = snapshot.jobs.filter((job) =>
+    ["queued", "preparing", "uploading", "running", "finalizing", "cancelling"].includes(
+      job.status,
+    ),
   );
   const recentItems = snapshot.library.slice(0, 4);
 
@@ -33,7 +35,7 @@ export function Dashboard({ snapshot, onImport, onNavigate }: DashboardProps) {
           </h2>
           <p>
             Trasforma documenti, PDF, audio e video senza spedire i tuoi file
-            altrove. La nuova base è pronta a crescere, motore dopo motore.
+            altrove. Scegli il risultato, crea un batch e seguine ogni fase.
           </p>
           <div className="hero-actions">
             <button className="button button-primary" onClick={onImport} type="button">
@@ -78,34 +80,34 @@ export function Dashboard({ snapshot, onImport, onNavigate }: DashboardProps) {
           <QuickAction
             icon={<Languages size={22} />}
             title="Traduci un PDF"
-            description="Prepara una traduzione mantenendo struttura e layout."
+            description="Configura lingua e layout, poi segui ogni pagina in Attività."
             accent="blue"
             onClick={() => onNavigate("studio")}
           />
           <QuickAction
             icon={<Mic2 size={22} />}
             title="Trascrivi audio o video"
-            description="Crea testo e sottotitoli con Faster Whisper locale."
+            description="Crea testo, sottotitoli o JSON con Faster Whisper locale."
             accent="coral"
             onClick={() => onNavigate("studio")}
           />
           <QuickAction
             icon={<ShieldCheck size={22} />}
             title="Controlla la privacy"
-            description="Verifica modelli, cartelle e confine della rete."
+            description="Rileva e maschera dati personali nei file testuali."
             accent="ink"
-            onClick={() => onNavigate("settings")}
+            onClick={() => onNavigate("studio")}
           />
         </div>
       </section>
 
       <section className="metrics-grid" aria-label="Stato del workspace">
         <Metric label="Elementi in libreria" value={String(snapshot.library.length)} />
-        <Metric label="Da configurare" value={String(pendingJobs.length)} />
+        <Metric label="In elaborazione" value={String(pendingJobs.length)} />
         <Metric
           label="Motori disponibili"
           value={snapshot.bridge.available ? `${snapshot.bridge.readyEngines}` : "—"}
-          detail={snapshot.bridge.available ? "tramite ponte locale" : "avvia la versione 1"}
+          detail={snapshot.bridge.available ? "pronti in locale" : "avvia i motori locali"}
         />
         <Metric
           label="Memoria disponibile"
@@ -152,8 +154,8 @@ export function Dashboard({ snapshot, onImport, onNavigate }: DashboardProps) {
           <span className="eyebrow">Compatibilità</span>
           <h3>Motori esistenti</h3>
           <p>
-            La nuova app rileva la suite attuale solo sul loopback del Mac. Nessun
-            endpoint remoto e nessun token esterno.
+            La nuova app esegue la suite attuale solo sul loopback del Mac. Nessun
+            endpoint remoto, upload cloud o token esterno.
           </p>
           <div className="bridge-status" data-ready={snapshot.bridge.available}>
             <span className="status-dot" />
@@ -161,7 +163,7 @@ export function Dashboard({ snapshot, onImport, onNavigate }: DashboardProps) {
               <strong>{snapshot.bridge.label}</strong>
               <span>
                 {snapshot.bridge.available
-                  ? "Pronti per la migrazione progressiva"
+                  ? `Scheduler attivo · massimo ${snapshot.bridge.batchParallelism} lavori`
                   : "La nuova libreria funziona comunque in autonomia"}
               </span>
             </div>

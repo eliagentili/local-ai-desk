@@ -21,13 +21,28 @@ export interface LibraryItem {
 
 export interface Job {
   id: string;
+  batchId: string | null;
   libraryItemId: string | null;
   inputName: string;
   workflow: string;
+  tool: string;
+  outputFormat: string;
+  language: string;
+  sourceLanguage: string;
+  targetLanguage: string;
+  translationMode: string;
   status: string;
   progress: number;
   stage: string;
+  stageCurrent: number;
+  stageTotal: number;
+  partIndex: number;
+  totalParts: number;
   outputPath: string | null;
+  outputName: string | null;
+  outputMime: string | null;
+  engine: string | null;
+  elapsedSeconds: number | null;
   error: string | null;
   createdAt: string;
   updatedAt: string;
@@ -45,6 +60,7 @@ export interface BridgeStatus {
   localOnly: boolean;
   readyEngines: number;
   totalEngines: number;
+  batchParallelism: number;
   label: string;
   engines: EngineStatus[];
 }
@@ -69,4 +85,27 @@ export interface ImportReport {
   duplicates: number;
   rejected: string[];
   snapshot: AppSnapshot;
+}
+
+export type WorkflowIntent = "extract" | "translate" | "ocr" | "transcribe" | "privacy";
+
+export interface WorkflowOptions {
+  intent: WorkflowIntent;
+  outputFormat: string;
+  language: string;
+  sourceLanguage: string;
+  targetLanguage: string;
+  translationMode: "translated" | "bilingual";
+}
+
+export interface StartJobsReport {
+  batchId: string;
+  jobIds: string[];
+  snapshot: AppSnapshot;
+}
+
+export interface ExportReport {
+  path: string;
+  filename: string;
+  fileCount: number;
 }

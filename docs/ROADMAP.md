@@ -6,7 +6,7 @@ sola.
 
 ## F0 — Foundation desktop
 
-Stato: **in corso**.
+Stato: **completata nella 0.1**.
 
 - shell Tauri/React e design system;
 - database, libreria, import multiplo e deduplicazione;
@@ -15,18 +15,24 @@ Stato: **in corso**.
 - documentazione di prodotto, architettura e sicurezza;
 - build macOS riproducibile.
 
-Per chiuderla: test end-to-end dell'import, migrazioni DB versionate, log locale
-redatto e crash recovery di base.
+La migrazione compatibile del database e il recovery dei lavori interrotti sono
+stati aggiunti nella 0.2. Log locale redatto e recovery avanzato restano attività
+trasversali prima della 1.0.
 
 ## F1 — Job engine affidabile
+
+Stato: **prima release utilizzabile nella 0.2**.
 
 - adapter versionato verso i motori esistenti;
 - scheduler resource-aware per CPU, memoria, Metal e termiche;
 - concorrenza per motore e backpressure globale;
-- progresso a eventi per file e per batch;
-- annulla, annulla tutto, pausa, riprendi e retry;
-- risultati atomici e ZIP batch;
-- notifiche native e history dopo riavvio.
+- progresso a eventi per file e per batch; **completato**;
+- annulla e annulla tutto; **completato**;
+- risultati atomici e ZIP batch; **completato**;
+- upload in streaming e limite globale di tre lavori; **completato**;
+- pausa, riprendi e retry; **da completare**;
+- scheduler adattivo a memoria e termiche; **da completare**;
+- notifiche native e cronologia eventi visibile; **da completare**.
 
 Questa fase porta nella v2 tutte le capacità già presenti nella v1 senza
 regressioni.
