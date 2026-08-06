@@ -93,7 +93,16 @@ def status():
 
 def safe_name(name: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", Path(name).name).strip("-")
-    return cleaned or "input.bin"
+    return "input.bin" if cleaned in {"", ".", ".."} else cleaned
+
+
+def safe_upload_path(directory: Path, filename: str) -> Path:
+    """Return a normalized upload path contained by the private job directory."""
+    safe_root = os.path.realpath(directory) + os.sep
+    candidate = os.path.realpath(os.path.join(safe_root, safe_name(filename)))
+    if not os.path.normcase(candidate).startswith(os.path.normcase(safe_root)):
+        raise HTTPException(400, "Nome del file non valido.")
+    return Path(candidate)
 
 
 def extension_for(output_format: str) -> str:
@@ -273,10 +282,9 @@ async def translate_streamed_pdf(
         if content_length and content_length.isdigit():
             validate_size(int(content_length))
 
-        source_name = safe_name(filename)
-        if Path(source_name).suffix.lower() != ".pdf":
+        source = safe_upload_path(job_dir, filename)
+        if source.suffix.lower() != ".pdf":
             raise HTTPException(400, "Seleziona un file PDF.")
-        source = job_dir / source_name
         size = 0
         expected_size = (
             int(content_length)
@@ -423,9 +431,8 @@ async def process_streamed_file(
         if content_length and content_length.isdigit():
             validate_size(int(content_length))
 
-        source_name = safe_name(filename)
         with tempfile.TemporaryDirectory(prefix="job-", dir=JOBS_DIR) as raw_job:
-            source = Path(raw_job) / source_name
+            source = safe_upload_path(Path(raw_job), filename)
             size = 0
             with source.open("wb") as destination:
                 async for chunk in request.stream():
@@ -486,9 +493,10 @@ async def process(
             stem = "testo-protetto"
         else:
             assert file is not None
-            source_name = safe_name(file.filename or "input.bin")
             with tempfile.TemporaryDirectory(prefix="job-", dir=JOBS_DIR) as raw_job:
-                source = Path(raw_job) / source_name
+                source = safe_upload_path(
+                    Path(raw_job), file.filename or "input.bin"
+                )
                 size = 0
                 with source.open("wb") as destination:
                     while chunk := await file.read(1024 * 1024):

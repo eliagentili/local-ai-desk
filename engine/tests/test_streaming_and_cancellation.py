@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tempfile
 import threading
 import unittest
 from pathlib import Path
@@ -19,6 +20,21 @@ from backend.app.engines import (
 
 
 class StreamingUploadTests(unittest.TestCase):
+    def test_upload_paths_remain_inside_the_private_job_directory(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            for untrusted_name in (
+                "..",
+                "../outside.pdf",
+                "/tmp/outside.pdf",
+                r"..\outside.pdf",
+                "video grande.mp4",
+            ):
+                with self.subTest(filename=untrusted_name):
+                    candidate = main.safe_upload_path(root, untrusted_name)
+                    self.assertEqual(candidate.parent, root.resolve())
+                    self.assertNotIn(candidate.name, {"", ".", ".."})
+
     def test_raw_upload_is_streamed_and_processed(self):
         client = TestClient(main.app)
         result = EngineResult(output="testo", engine="fake", output_format="txt")
