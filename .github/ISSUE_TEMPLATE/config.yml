@@ -1,0 +1,6 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Segnalazione di sicurezza
+    url: https://github.com/eliagentili/local-ai-desk/security/advisories/new
+    about: Non pubblicare vulnerabilità o dati sensibili nelle issue.
+
