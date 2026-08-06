@@ -51,6 +51,12 @@
     "macOS": {
       "minimumSystemVersion": "14.0"
     },
+    "windows": {
+      "wix": {
+        "version": "0.3.0.1",
+        "upgradeCode": "b4b9bd36-b438-539a-8de1-c8cfce847656"
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
