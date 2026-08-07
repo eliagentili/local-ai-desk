@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { cp, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 async function walk(directory) {
@@ -65,11 +65,23 @@ export async function prepareReleaseAssets({
 
   const dmg = exactlyOne(files, (path) => path.endsWith(".dmg"), "Installer macOS");
   const macArchive = exactlyOne(files, (path) => path.endsWith(".app.tar.gz"), "Updater macOS");
-  const macSignature = exactlyOne(files, (path) => path === `${macArchive}.sig`, "Firma updater macOS");
+  const macSignature = exactlyOne(
+    files,
+    (path) => basename(path) === `${basename(macArchive)}.sig`,
+    "Firma updater macOS",
+  );
   const nsis = exactlyOne(files, (path) => /-setup\.exe$/i.test(path), "Installer NSIS");
-  const nsisSignature = exactlyOne(files, (path) => path === `${nsis}.sig`, "Firma updater NSIS");
+  const nsisSignature = exactlyOne(
+    files,
+    (path) => basename(path) === `${basename(nsis)}.sig`,
+    "Firma updater NSIS",
+  );
   const msi = exactlyOne(files, (path) => path.endsWith(".msi"), "Installer MSI");
-  const msiSignature = exactlyOne(files, (path) => path === `${msi}.sig`, "Firma updater MSI");
+  const msiSignature = exactlyOne(
+    files,
+    (path) => basename(path) === `${basename(msi)}.sig`,
+    "Firma updater MSI",
+  );
   const sbom = exactlyOne(files, (path) => path.endsWith(".spdx.json"), "SBOM SPDX");
 
   const names = {
