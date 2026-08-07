@@ -26,6 +26,11 @@ modelli, cache e log rimangono nel profilo locale dell'utente. I log non devono
 contenere il contenuto dei documenti; nomi e percorsi possono comparire nei log
 diagnostici locali.
 
+I file aperti con **Drop rapido** non vengono inseriti nella Libreria e non sono
+inclusi nel database. Le copie temporanee usate per trasferirli ai motori locali
+vengono eliminate dopo il completamento, l'errore o l'annullamento. L'output
+resta invece disponibile finché l'utente non lo elimina.
+
 ## Controllo e cancellazione
 
 La posizione effettiva dei dati viene mostrata in **Impostazioni**. Disinstallare

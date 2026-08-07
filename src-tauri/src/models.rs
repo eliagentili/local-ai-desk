@@ -110,6 +110,13 @@ pub struct ImportReport {
     pub snapshot: AppSnapshot,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickFilesReport {
+    pub files: Vec<LibraryItem>,
+    pub rejected: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowOptions {
@@ -138,6 +145,7 @@ impl Default for WorkflowOptions {
 pub struct JobSpec {
     pub id: String,
     pub batch_id: String,
+    pub library_item_id: Option<String>,
     pub item: LibraryItem,
     pub options: WorkflowOptions,
     pub tool: String,

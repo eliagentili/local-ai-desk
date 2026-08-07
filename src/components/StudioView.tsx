@@ -6,8 +6,9 @@ import {
   ScanText,
   ShieldCheck,
   Sparkles,
+  UploadCloud,
 } from "lucide-react";
-import { useDeferredValue, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 
 import { formatBytes } from "../lib/format";
 import type {
@@ -132,10 +133,22 @@ interface StudioViewProps {
   bridge: BridgeStatus;
   starting: boolean;
   onImport: () => void;
-  onStart: (itemIds: string[], options: WorkflowOptions) => void;
+  onQuickPick: () => void;
+  onClearQuick: () => void;
+  onStart: (itemIds: string[], quickPaths: string[], options: WorkflowOptions) => void;
+  quickItems: LibraryItem[];
 }
 
-export function StudioView({ items, bridge, starting, onImport, onStart }: StudioViewProps) {
+export function StudioView({
+  items,
+  bridge,
+  starting,
+  onImport,
+  onQuickPick,
+  onClearQuick,
+  onStart,
+  quickItems,
+}: StudioViewProps) {
   const [intent, setIntent] = useState<WorkflowIntent>("extract");
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [query, setQuery] = useState("");
@@ -147,10 +160,14 @@ export function StudioView({ items, bridge, starting, onImport, onStart }: Studi
     "translated",
   );
   const deferredQuery = useDeferredValue(query.trim().toLocaleLowerCase("it"));
-  const itemById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items]);
+  const allItems = useMemo(() => [...quickItems, ...items], [items, quickItems]);
+  const itemById = useMemo(
+    () => new Map(allItems.map((item) => [item.id, item])),
+    [allItems],
+  );
   const compatible = useMemo(
-    () => items.filter((item) => supportsIntent(item, intent)),
-    [intent, items],
+    () => allItems.filter((item) => supportsIntent(item, intent)),
+    [allItems, intent],
   );
   const visible = useMemo(
     () =>
@@ -159,6 +176,19 @@ export function StudioView({ items, bridge, starting, onImport, onStart }: Studi
       ),
     [compatible, deferredQuery],
   );
+  const selectedQuickCount = Array.from(selected).filter(
+    (id) => itemById.get(id)?.status === "temporary",
+  ).length;
+
+  useEffect(() => {
+    setSelected((current) => {
+      const next = new Set(Array.from(current).filter((id) => itemById.has(id)));
+      for (const item of quickItems) {
+        if (supportsIntent(item, intent)) next.add(item.id);
+      }
+      return next;
+    });
+  }, [intent, itemById, quickItems]);
 
   function chooseIntent(next: WorkflowIntent) {
     setIntent(next);
@@ -200,7 +230,16 @@ export function StudioView({ items, bridge, starting, onImport, onStart }: Studi
   }
 
   function start() {
-    onStart(Array.from(selected), {
+    const selectedItems = Array.from(selected)
+      .map((id) => itemById.get(id))
+      .filter((item): item is LibraryItem => Boolean(item));
+    const itemIds = selectedItems
+      .filter((item) => item.status !== "temporary")
+      .map((item) => item.id);
+    const quickPaths = selectedItems
+      .filter((item) => item.status === "temporary")
+      .map((item) => item.path);
+    onStart(itemIds, quickPaths, {
       intent,
       outputFormat,
       language,
@@ -255,20 +294,47 @@ export function StudioView({ items, bridge, starting, onImport, onStart }: Studi
           <div className="panel-heading source-heading">
             <div>
               <span className="eyebrow">Sorgenti compatibili</span>
-              <h3>{selected.size ? `${selected.size} selezionati` : "Scegli dalla libreria"}</h3>
+              <h3>{selected.size ? `${selected.size} selezionati` : "Scegli o trascina"}</h3>
             </div>
-            <button className="text-button" onClick={toggleAllVisible} type="button">
-              {visible.length > 0 && visible.every((item) => selected.has(item.id))
-                ? "Deseleziona"
-                : "Seleziona tutti"}
-            </button>
+            <div className="source-heading-actions">
+              {quickItems.length ? (
+                <button
+                  className="text-button"
+                  onClick={onClearQuick}
+                  type="button"
+                >
+                  Svuota rapidi
+                </button>
+              ) : null}
+              <button className="text-button" onClick={toggleAllVisible} type="button">
+                {visible.length > 0 && visible.every((item) => selected.has(item.id))
+                  ? "Deseleziona"
+                  : "Seleziona tutti"}
+              </button>
+            </div>
           </div>
+          <button
+            className="studio-drop-zone"
+            data-filled={quickItems.length > 0}
+            onClick={onQuickPick}
+            type="button"
+          >
+            <span className="studio-drop-icon"><UploadCloud size={20} /></span>
+            <span>
+              <strong>
+                {quickItems.length
+                  ? `${quickItems.length} ${quickItems.length === 1 ? "file rapido pronto" : "file rapidi pronti"}`
+                  : "Trascina file qui o scegli dal computer"}
+              </strong>
+              <small>Fuori dalla Libreria · copie di lavoro eliminate automaticamente</small>
+            </span>
+          </button>
           <label className="search-field studio-search">
             <FileSearch size={15} />
             <span className="sr-only">Cerca sorgenti</span>
             <input
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Cerca nella libreria"
+              placeholder="Cerca tra file rapidi e Libreria"
               type="search"
               value={query}
             />
@@ -286,22 +352,30 @@ export function StudioView({ items, bridge, starting, onImport, onStart }: Studi
                   <span className="file-badge">{item.kind.slice(0, 3).toUpperCase()}</span>
                   <span className="row-copy">
                     <strong>{item.name}</strong>
-                    <span>{formatBytes(item.sizeBytes)} · {item.kind}</span>
+                    <span>
+                      {formatBytes(item.sizeBytes)} · {item.kind}
+                      {item.status === "temporary" ? " · temporaneo" : " · Libreria"}
+                    </span>
                   </span>
                 </label>
               ))}
             </div>
           ) : (
             <div className="studio-empty">
-              <strong>{items.length ? "Nessun file compatibile" : "La libreria è vuota"}</strong>
+              <strong>{allItems.length ? "Nessun file compatibile" : "Nessun file selezionato"}</strong>
               <p>
-                {items.length
-                  ? "Cambia obiettivo oppure importa un formato adatto."
-                  : "Importa uno o più file per preparare il primo batch."}
+                {allItems.length
+                  ? "Cambia obiettivo oppure scegli un formato adatto."
+                  : "Trascina uno o più file: verranno usati per il batch senza entrare nella Libreria."}
               </p>
-              <button className="button button-secondary" onClick={onImport} type="button">
-                Importa file
-              </button>
+              <div className="studio-empty-actions">
+                <button className="button button-primary" onClick={onQuickPick} type="button">
+                  Scegli file rapidi
+                </button>
+                <button className="button button-secondary" onClick={onImport} type="button">
+                  Aggiungi alla Libreria
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -362,7 +436,7 @@ export function StudioView({ items, bridge, starting, onImport, onStart }: Studi
               Concorrenza <strong>max {bridge.batchParallelism}</strong>
             </span>
             <span>
-              Destinazione <strong>Archivio locale</strong>
+              Sorgenti <strong>{selectedQuickCount ? `${selectedQuickCount} temporanei` : "Libreria"}</strong>
             </span>
           </div>
           <button
@@ -377,8 +451,8 @@ export function StudioView({ items, bridge, starting, onImport, onStart }: Studi
               : `Avvia ${selected.size || ""} ${selected.size === 1 ? "lavoro" : "lavori"}`}
           </button>
           <p className="config-note">
-            I file originali non vengono modificati. I risultati vengono salvati prima
-            in modo atomico e possono essere raccolti in un unico ZIP.
+            Gli originali non vengono modificati. I file rapidi non entrano nel database;
+            le copie di trasferimento vengono eliminate anche in caso di errore o annullamento.
           </p>
         </div>
       </section>

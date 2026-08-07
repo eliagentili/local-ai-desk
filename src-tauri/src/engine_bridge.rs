@@ -668,6 +668,7 @@ mod tests {
         let spec = JobSpec {
             id: "cancel-job".to_string(),
             batch_id: "cancel-batch".to_string(),
+            library_item_id: Some("cancel-item".to_string()),
             item: database::list_library(&database_path)
                 .expect("library")
                 .remove(0),
@@ -748,6 +749,7 @@ mod tests {
         let spec = JobSpec {
             id: "bridge-job".to_string(),
             batch_id: "bridge-batch".to_string(),
+            library_item_id: Some("bridge-item".to_string()),
             item: LibraryItem {
                 id: "bridge-item".to_string(),
                 name: "prova-ponte.md".to_string(),

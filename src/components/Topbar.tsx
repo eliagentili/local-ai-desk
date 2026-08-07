@@ -1,4 +1,4 @@
-import { CloudOff, Cpu, Plus } from "lucide-react";
+import { Archive, CloudOff, Cpu } from "lucide-react";
 
 import type { BridgeStatus, SectionId } from "../types";
 
@@ -41,8 +41,8 @@ export function Topbar({ active, bridge, importing, onImport }: TopbarProps) {
           onClick={onImport}
           type="button"
         >
-          <Plus size={16} />
-          {importing ? "Importazione…" : "Importa"}
+          <Archive size={16} />
+          {importing ? "Aggiunta…" : "Aggiungi alla libreria"}
         </button>
       </div>
     </header>

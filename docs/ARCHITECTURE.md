@@ -33,7 +33,14 @@ I file non vengono copiati durante l'importazione. L'hash viene calcolato con
 buffer da 8 MB, quindi il costo di memoria resta limitato anche per video da
 diversi GB. Le operazioni di disco girano fuori dal thread UI.
 
-## Runtime desktop 0.3
+Il percorso **Drop rapido** è separato dalla Libreria: Tauri canonicalizza i
+path ricevuti dal drag & drop nativo, legge solo i metadati e crea job con
+`library_item_id = NULL`. Non calcola hash e non inserisce sorgenti nel database.
+Il worker riceve il file in streaming dentro una directory temporanea che viene
+rimossa al completamento, dopo un errore e in seguito a un annullamento. Soltanto
+il risultato atomico resta nel contenitore dell'app.
+
+## Runtime desktop 0.4
 
 Il core Rust interroga ed esegue lavori esclusivamente su
 `http://127.0.0.1:8787`, con timeout e URL non configurabile dall’interfaccia.
@@ -81,7 +88,7 @@ inventare una percentuale.
 
 - Content Security Policy con rete frontend bloccata;
 - selettore file nativo come unico permesso aggiuntivo della finestra;
-- path canonicalizzati e verificati prima dell'indicizzazione;
+- path canonicalizzati e verificati prima dell'indicizzazione o del job rapido;
 - database in WAL, foreign key abilitate e timeout di concorrenza;
 - nessuna shell generica esposta alla UI;
 - futuro download dei pack con firma, checksum e manifest bloccato per versione.

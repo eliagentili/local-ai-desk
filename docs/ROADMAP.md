@@ -44,6 +44,8 @@ Stato: **prima release utilizzabile nella 0.2**.
 - annulla e annulla tutto; **completato**;
 - risultati atomici e ZIP batch; **completato**;
 - upload in streaming e limite globale di tre lavori; **completato**;
+- drag & drop rapido senza persistenza delle sorgenti e con pulizia automatica;
+  **completato**;
 - pausa, riprendi e retry; **da completare**;
 - scheduler adattivo a memoria e termiche; **da completare**;
 - notifiche native e cronologia eventi visibile; **da completare**.
@@ -68,7 +70,8 @@ regressioni.
 - ricerca full-text locale e filtri salvati;
 - ricerca semantica opzionale con embedding locale;
 - duplicati, retention, backup e restore;
-- Quick Look/preview, drag & drop e integrazione Finder/Explorer/Share Sheet.
+- Quick Look/preview e integrazione Finder/Explorer/Share Sheet. Il drag & drop
+  rapido multipiattaforma è disponibile dalla 0.4.
 
 ## F4 — Workflow e automazioni
 
