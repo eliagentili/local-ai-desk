@@ -85,6 +85,7 @@ l'originale o i risultati.
 - risultati atomici e ZIP con manifest JSON;
 - runtime e motori in background, senza finestre Terminal o PowerShell;
 - dati, modelli e cache nel profilo dell'utente;
+- aggiornamenti firmati Ed25519 con controllo automatico, progresso e riavvio esplicito;
 - CSP restrittiva, CI multipiattaforma, CodeQL, SBOM e checksum di release;
 - interfaccia responsive, utilizzabile da tastiera e rispettosa del movimento ridotto.
 
@@ -102,8 +103,15 @@ I link puntano sempre all'ultima versione pubblicata:
 - [Note, versioni precedenti e altri asset](https://github.com/eliagentili/local-ai-desk/releases)
 - [Checksum SHA-256](https://github.com/eliagentili/local-ai-desk/releases/latest/download/SHA256SUMS.txt)
 
-La prima release pubblica è una **beta**. Ogni release contiene installer, SBOM
-SPDX e checksum. Prima di installare considera questi limiti:
+Dalla **0.5**, l’app controlla in autonomia le nuove release dopo l’avvio e poi
+periodicamente. Decide sempre l’utente quando scaricare e riavviare; se un lavoro
+è attivo, l’installazione resta in attesa. Il pacchetto viene accettato soltanto
+se supera la verifica della firma Ed25519. Per passare dalla 0.4 o precedente
+alla 0.5 serve un ultimo download manuale dai pulsanti qui sopra.
+
+La prima release pubblica è una **beta**. Ogni release contiene installer,
+manifest updater firmato, firme separate, SBOM SPDX e checksum. Prima di
+installare considera questi limiti:
 
 - macOS usa una firma ad-hoc e può richiedere l'autorizzazione in **Privacy e sicurezza**;
 - Windows può mostrare SmartScreen perché manca ancora una firma Authenticode;

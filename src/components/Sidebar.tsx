@@ -29,11 +29,12 @@ const navigation: NavigationItem[] = [
 
 interface SidebarProps {
   active: SectionId;
+  appVersion: string;
   jobCount: number;
   onNavigate: (section: SectionId) => void;
 }
 
-export function Sidebar({ active, jobCount, onNavigate }: SidebarProps) {
+export function Sidebar({ active, appVersion, jobCount, onNavigate }: SidebarProps) {
   return (
     <aside className="sidebar">
       <div className="brand" aria-label="Local AI Desk">
@@ -42,7 +43,9 @@ export function Sidebar({ active, jobCount, onNavigate }: SidebarProps) {
         </span>
         <span className="brand-copy">
           <strong>Local AI Desk</strong>
-          <small>macOS + Windows · 0.4</small>
+          <small>
+            macOS + Windows · {appVersion === "…" ? "avvio" : appVersion === "Anteprima browser" ? appVersion : `v${appVersion}`}
+          </small>
         </span>
       </div>
 

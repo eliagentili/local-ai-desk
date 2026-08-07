@@ -90,6 +90,8 @@ jobs:
         run: npm ci
       - name: Validate frontend
         run: npm run build
+      - name: Test signed release manifest
+        run: npm run test:release
       - name: Format native core
         working-directory: src-tauri
         run: cargo fmt --check
@@ -99,13 +101,25 @@ jobs:
       - name: Test native core
         working-directory: src-tauri
         run: cargo test
+      - name: Verify updater signing secrets
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          test -n "$TAURI_SIGNING_PRIVATE_KEY"
+          test -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
       - name: Build native installers
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1
         env:
           APPLE_SIGNING_IDENTITY: "-"
+          TAURI_SIGNING_PRIVATE_KEY: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         with:
-          args: ${{ matrix.args }}
+          args: ${{ matrix.args }} ${{ startsWith(github.ref, 'refs/tags/v') && '--config src-tauri/tauri.updater.conf.json' || '' }}
           uploadWorkflowArtifacts: true
+          uploadUpdaterSignatures: true
           workflowArtifactNamePattern: "local-ai-desk-2-[platform]-[arch]-[bundle]"
 
   sbom:
@@ -133,6 +147,9 @@ jobs:
       actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
       - name: Download installers
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -144,23 +161,11 @@ jobs:
           name: local-ai-desk-source.spdx.json
           path: downloaded/sbom
       - name: Prepare release assets and checksums
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p release-assets
-          while IFS= read -r -d '' asset; do
-            asset_name="$(basename "$asset")"
-            case "$asset_name" in
-              *.dmg) release_name="Local-AI-Desk-macOS-Apple-Silicon.dmg" ;;
-              *-setup.exe) release_name="Local-AI-Desk-Windows-x64-Setup.exe" ;;
-              *.msi) release_name="Local-AI-Desk-Windows-x64.msi" ;;
-              *.spdx.json) release_name="local-ai-desk-source.spdx.json" ;;
-              *) echo "Unsupported release asset: $asset_name" >&2; exit 1 ;;
-            esac
-            cp "$asset" "release-assets/$release_name"
-          done < <(find downloaded -type f \( -name '*.dmg' -o -name '*.msi' -o -name '*.exe' -o -name '*.spdx.json' \) -print0)
-          test "$(find release-assets -type f | wc -l)" -ge 4
-          (cd release-assets && sha256sum -- * > SHA256SUMS.txt)
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_NOTES_FILE: .github/release-notes/${{ github.ref_name }}.md
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node scripts/prepare-release-assets.mjs downloaded release-assets
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
