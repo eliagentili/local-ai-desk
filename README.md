@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/eliagentili/local-ai-desk/actions/workflows/desktop.yml"><img alt="Desktop CI" src="https://github.com/eliagentili/local-ai-desk/actions/workflows/desktop.yml/badge.svg"></a>
+  <a href="https://github.com/eliagentili/local-ai-desk/actions/workflows/desktop.yml?query=branch%3Amain+event%3Apush"><img alt="Desktop CI · main" src="https://github.com/eliagentili/local-ai-desk/actions/workflows/desktop.yml/badge.svg?branch=main&amp;event=push"></a>
   <a href="https://github.com/eliagentili/local-ai-desk/actions/workflows/security.yml"><img alt="Security" src="https://github.com/eliagentili/local-ai-desk/actions/workflows/security.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="Licenza AGPL v3+" src="https://img.shields.io/badge/license-AGPL--3.0--or--later-0a1f29.svg"></a>
 </p>
