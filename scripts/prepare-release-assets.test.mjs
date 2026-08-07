@@ -20,11 +20,11 @@ test("prepara installer, firme, manifest updater e checksum", async () => {
   await Promise.all([
     fixture(input, "mac/Local AI Desk 2_0.5.0_aarch64.dmg", "dmg"),
     fixture(input, "mac/Local AI Desk 2.app.tar.gz", "mac-update"),
-    fixture(input, "mac/Local AI Desk 2.app.tar.gz.sig", "mac-signature\n"),
-    fixture(input, "windows/Local AI Desk 2_0.5.0_x64-setup.exe", "nsis"),
-    fixture(input, "windows/Local AI Desk 2_0.5.0_x64-setup.exe.sig", "windows-signature\n"),
-    fixture(input, "windows/Local AI Desk 2_0.5.0_x64.msi", "msi"),
-    fixture(input, "windows/Local AI Desk 2_0.5.0_x64.msi.sig", "msi-signature\n"),
+    fixture(input, "updater-mac/Local AI Desk 2.app.tar.gz.sig", "mac-signature\n"),
+    fixture(input, "nsis/Local AI Desk 2_0.5.0_x64-setup.exe", "nsis"),
+    fixture(input, "updater-windows/Local AI Desk 2_0.5.0_x64-setup.exe.sig", "windows-signature\n"),
+    fixture(input, "msi/Local AI Desk 2_0.5.0_x64.msi", "msi"),
+    fixture(input, "updater-windows/Local AI Desk 2_0.5.0_x64.msi.sig", "msi-signature\n"),
     fixture(input, "sbom/local-ai-desk-source.spdx.json", "{}"),
   ]);
   const notes = await fixture(root, "notes.md", "Note firmate\n");
