@@ -13,6 +13,7 @@ export type UpdatePhase =
   | "current"
   | "available"
   | "downloading"
+  | "downloaded"
   | "installing"
   | "ready"
   | "restarting"
@@ -67,6 +68,7 @@ function errorMessage(error: unknown) {
 export function useAppUpdater(hasActiveJobs: boolean): AppUpdater {
   const native = isTauri();
   const updateRef = useRef<Update | null>(null);
+  const downloadedRef = useRef(false);
   const busyRef = useRef(false);
   const activeJobsRef = useRef(hasActiveJobs);
   const phaseRef = useRef<UpdatePhase>(native ? "idle" : "unsupported");
@@ -111,7 +113,7 @@ export function useAppUpdater(hasActiveJobs: boolean): AppUpdater {
       if (
         !native ||
         busyRef.current ||
-        ["downloading", "installing", "ready", "restarting"].includes(phaseRef.current)
+        ["downloading", "downloaded", "installing", "ready", "restarting"].includes(phaseRef.current)
       ) return;
       busyRef.current = true;
       setSnapshot((current) => ({
@@ -124,6 +126,7 @@ export function useAppUpdater(hasActiveJobs: boolean): AppUpdater {
       try {
         const previous = updateRef.current;
         updateRef.current = null;
+        downloadedRef.current = false;
         if (previous) await previous.close().catch(() => undefined);
 
         const { check } = await import("@tauri-apps/plugin-updater");
@@ -187,36 +190,45 @@ export function useAppUpdater(hasActiveJobs: boolean): AppUpdater {
 
   const downloadAndInstall = useCallback(async () => {
     const update = updateRef.current;
-    if (!native || !update || busyRef.current || activeJobsRef.current) return;
+    if (!native || !update || busyRef.current) return;
     busyRef.current = true;
     let downloadedBytes = 0;
-    setSnapshot((current) => ({
-      ...current,
-      phase: "downloading",
-      downloadedBytes: 0,
-      totalBytes: null,
-      error: null,
-      dismissed: false,
-    }));
 
     try {
-      await update.download((event: DownloadEvent) => {
-        if (event.event === "Started") {
-          setSnapshot((current) => ({
-            ...current,
-            downloadedBytes: 0,
-            totalBytes: event.data.contentLength ?? null,
-          }));
-        } else if (event.event === "Progress") {
-          downloadedBytes += event.data.chunkLength;
-          setSnapshot((current) => ({ ...current, downloadedBytes }));
-        } else {
-          setSnapshot((current) => ({
-            ...current,
-            downloadedBytes: current.totalBytes ?? current.downloadedBytes,
-          }));
-        }
-      });
+      if (!downloadedRef.current) {
+        setSnapshot((current) => ({
+          ...current,
+          phase: "downloading",
+          downloadedBytes: 0,
+          totalBytes: null,
+          error: null,
+          dismissed: false,
+        }));
+        await update.download((event: DownloadEvent) => {
+          if (event.event === "Started") {
+            setSnapshot((current) => ({
+              ...current,
+              downloadedBytes: 0,
+              totalBytes: event.data.contentLength ?? null,
+            }));
+          } else if (event.event === "Progress") {
+            downloadedBytes += event.data.chunkLength;
+            setSnapshot((current) => ({ ...current, downloadedBytes }));
+          } else {
+            setSnapshot((current) => ({
+              ...current,
+              downloadedBytes: current.totalBytes ?? current.downloadedBytes,
+            }));
+          }
+        });
+        downloadedRef.current = true;
+      }
+
+      if (activeJobsRef.current) {
+        setSnapshot((current) => ({ ...current, phase: "downloaded" }));
+        return;
+      }
+
       setSnapshot((current) => ({ ...current, phase: "installing" }));
       await update.install();
       setSnapshot((current) => ({ ...current, phase: "ready" }));

@@ -52,6 +52,8 @@ function updateStatus(updater: AppUpdater) {
       return updater.progress === null
         ? "Download protetto in corso…"
         : `Download ${updater.progress}%`;
+    case "downloaded":
+      return "Download completato, pronto per l’installazione";
     case "installing":
       return "Verifica firma e preparazione…";
     case "ready":
@@ -69,12 +71,12 @@ export function SettingsView({ hasActiveJobs, snapshot, updater }: SettingsViewP
   const checkedAt = formatDate(updater.lastCheckedAt);
   const releaseDate = formatDate(updater.releaseDate);
   const updating = ["downloading", "installing", "restarting"].includes(updater.phase);
-  const blocked = hasActiveJobs && ["available", "ready", "error"].includes(updater.phase);
+  const blocked = hasActiveJobs && ["downloaded", "ready"].includes(updater.phase);
 
   const handlePrimaryAction = () => {
     if (updater.phase === "ready") {
       void updater.restart();
-    } else if (updater.phase === "available" || (updater.phase === "error" && updater.availableVersion)) {
+    } else if (["available", "downloaded"].includes(updater.phase) || (updater.phase === "error" && updater.availableVersion)) {
       void updater.downloadAndInstall();
     } else {
       void updater.checkForUpdates(true);
@@ -85,6 +87,7 @@ export function SettingsView({ hasActiveJobs, snapshot, updater }: SettingsViewP
     if (updater.phase === "checking") return "Controllo…";
     if (updater.phase === "downloading") return updater.progress === null ? "Download…" : `${updater.progress}%`;
     if (updater.phase === "installing") return "Preparazione…";
+    if (updater.phase === "downloaded") return "Installa aggiornamento";
     if (updater.phase === "ready") return "Riavvia e aggiorna";
     if (updater.phase === "restarting") return "Riavvio…";
     if (updater.phase === "available" || (updater.phase === "error" && updater.availableVersion)) {
@@ -174,7 +177,7 @@ export function SettingsView({ hasActiveJobs, snapshot, updater }: SettingsViewP
         {blocked ? (
           <div className="inline-alert">
             <span>Aggiornamento in attesa</span>
-            <p>Termina o annulla i lavori attivi: l’app non si aggiornerà mai durante un’elaborazione.</p>
+            <p>Il pacchetto è al sicuro. Termina o annulla i lavori attivi, poi conferma l’installazione.</p>
           </div>
         ) : null}
 
@@ -200,7 +203,7 @@ export function SettingsView({ hasActiveJobs, snapshot, updater }: SettingsViewP
               onClick={handlePrimaryAction}
               type="button"
             >
-              {updater.phase === "ready" ? <RotateCw size={16} /> : updater.phase === "available" ? <Download size={16} /> : <RefreshCw className={updating ? "spin" : undefined} size={16} />}
+              {updater.phase === "ready" ? <RotateCw size={16} /> : ["available", "downloaded"].includes(updater.phase) ? <Download size={16} /> : <RefreshCw className={updating ? "spin" : undefined} size={16} />}
               {primaryLabel}
             </button>
           </div>

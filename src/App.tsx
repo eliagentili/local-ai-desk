@@ -216,7 +216,7 @@ function App() {
   const updater = useAppUpdater(hasActiveJobs);
   const showUpdateBanner =
     !updater.dismissed &&
-    ["available", "downloading", "installing", "ready"].includes(updater.phase);
+    ["available", "downloading", "downloaded", "installing", "ready"].includes(updater.phase);
 
   useEffect(() => {
     if (!isTauri() || !hasActiveJobs) return;
@@ -294,6 +294,14 @@ function App() {
     options: WorkflowOptions,
   ) {
     if (!isTauri() || starting) return;
+    if (["installing", "restarting"].includes(updater.phase)) {
+      setNotice({
+        tone: "error",
+        title: "Aggiornamento in corso",
+        detail: "Attendi pochi secondi prima di avviare un nuovo lavoro.",
+      });
+      return;
+    }
     setStarting(true);
     setNotice(null);
     try {

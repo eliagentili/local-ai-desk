@@ -10,13 +10,14 @@ interface UpdateBannerProps {
 
 export function UpdateBanner({ hasActiveJobs, onOpenSettings, updater }: UpdateBannerProps) {
   const busy = updater.phase === "downloading" || updater.phase === "installing";
+  const downloaded = updater.phase === "downloaded";
   const ready = updater.phase === "ready";
   const handleAction = () => {
-    if (hasActiveJobs) {
+    if (hasActiveJobs && (ready || downloaded)) {
       onOpenSettings();
     } else if (ready) {
       void updater.restart();
-    } else if (updater.phase === "available") {
+    } else if (updater.phase === "available" || downloaded) {
       void updater.downloadAndInstall();
     } else {
       onOpenSettings();
@@ -32,13 +33,15 @@ export function UpdateBanner({ hasActiveJobs, onOpenSettings, updater }: UpdateB
         <strong>
           {ready
             ? "Aggiornamento pronto"
+            : downloaded
+              ? "Aggiornamento scaricato"
             : busy
               ? updater.phase === "installing" ? "Preparazione sicura…" : `Download ${updater.progress === null ? "…" : `${updater.progress}%`}`
               : `Local AI Desk ${updater.availableVersion}`}
         </strong>
         <span>
           {hasActiveJobs
-            ? "Attenderà la fine dei lavori attivi."
+            ? ready || downloaded ? "Attenderà la fine dei lavori attivi." : "Scarica ora; l’installazione attenderà i lavori."
             : ready
               ? "Riavvia quando vuoi per completare."
               : busy
@@ -50,9 +53,9 @@ export function UpdateBanner({ hasActiveJobs, onOpenSettings, updater }: UpdateB
         ) : null}
       </div>
       <button className="button button-primary button-compact" disabled={busy} onClick={handleAction} type="button">
-        {hasActiveJobs ? "Dettagli" : ready ? "Riavvia" : busy ? "Attendi" : "Aggiorna"}
+        {hasActiveJobs && (ready || downloaded) ? "Dettagli" : ready ? "Riavvia" : downloaded ? "Installa" : busy ? "Attendi" : "Aggiorna"}
       </button>
-      {!busy && !ready ? (
+      {!busy && !ready && !downloaded ? (
         <button className="update-banner-close" aria-label="Ricordamelo più tardi" onClick={updater.dismiss} type="button">
           <X size={15} />
         </button>

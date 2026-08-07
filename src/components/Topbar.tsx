@@ -23,7 +23,7 @@ interface TopbarProps {
 }
 
 export function Topbar({ active, bridge, importing, onImport, onOpenUpdates, updater }: TopbarProps) {
-  const showUpdate = ["available", "downloading", "installing", "ready"].includes(updater.phase);
+  const showUpdate = ["available", "downloading", "downloaded", "installing", "ready"].includes(updater.phase);
   return (
     <header className="topbar">
       <div>
@@ -36,6 +36,8 @@ export function Topbar({ active, bridge, importing, onImport, onOpenUpdates, upd
             {updater.phase === "ready" ? <RotateCw size={14} /> : <Download size={14} />}
             {updater.phase === "ready"
               ? "Riavvia per aggiornare"
+              : updater.phase === "downloaded"
+                ? "Pronto da installare"
               : updater.phase === "downloading"
                 ? `Aggiornamento ${updater.progress === null ? "…" : `${updater.progress}%`}`
                 : `Versione ${updater.availableVersion}`}
