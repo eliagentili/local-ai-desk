@@ -6,6 +6,7 @@
 - [ ] test TypeScript, Rust e Python verdi su macOS e Windows;
 - [ ] audit npm, Rust e Python senza vulnerabilità critiche note;
 - [ ] installer prodotti da runner nativi;
+- [ ] artefatti updater, firme Ed25519 e `latest.json` validi per macOS e Windows;
 - [ ] SBOM SPDX e `SHA256SUMS.txt` allegati alla release;
 - [ ] note di rilascio con piattaforme, requisiti, privacy e limiti noti;
 - [ ] test di installazione, avvio, elaborazione e disinstallazione su macchina pulita;
@@ -15,7 +16,7 @@
 
 - [ ] firma Developer ID e notarizzazione Apple;
 - [ ] firma Authenticode Windows;
-- [ ] aggiornamenti automatici firmati e rollback verificato;
+- [ ] rollback dell’aggiornamento verificato su entrambe le piattaforme;
 - [ ] threat model e audit privacy aggiornati;
 - [ ] test di spazio disco esaurito, force quit, file ostili e batch multi-GB;
 - [ ] accessibilità VoiceOver, tastiera e contrasto verificata;

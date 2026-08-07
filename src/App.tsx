@@ -10,9 +10,12 @@ import { Dashboard } from "./components/Dashboard";
 import { LibraryView } from "./components/LibraryView";
 import { ModelsView } from "./components/ModelsView";
 import { PlaceholderView } from "./components/PlaceholderView";
+import { SettingsView } from "./components/SettingsView";
 import { Sidebar } from "./components/Sidebar";
 import { StudioView } from "./components/StudioView";
 import { Topbar } from "./components/Topbar";
+import { UpdateBanner } from "./components/UpdateBanner";
+import { useAppUpdater } from "./hooks/useAppUpdater";
 import type {
   AppSnapshot,
   BridgeStatus,
@@ -210,6 +213,10 @@ function App() {
   }, []);
 
   const hasActiveJobs = snapshot.jobs.some((job) => activeJobStates.has(job.status));
+  const updater = useAppUpdater(hasActiveJobs);
+  const showUpdateBanner =
+    !updater.dismissed &&
+    ["available", "downloading", "downloaded", "installing", "ready"].includes(updater.phase);
 
   useEffect(() => {
     if (!isTauri() || !hasActiveJobs) return;
@@ -287,6 +294,14 @@ function App() {
     options: WorkflowOptions,
   ) {
     if (!isTauri() || starting) return;
+    if (["installing", "restarting"].includes(updater.phase)) {
+      setNotice({
+        tone: "error",
+        title: "Aggiornamento in corso",
+        detail: "Attendi pochi secondi prima di avviare un nuovo lavoro.",
+      });
+      return;
+    }
     setStarting(true);
     setNotice(null);
     try {
@@ -450,13 +465,19 @@ function App() {
         />
       );
     }
-    return <PlaceholderView onNavigate={setActive} section={active} snapshot={snapshot} />;
+    if (active === "settings") {
+      return (
+        <SettingsView hasActiveJobs={hasActiveJobs} snapshot={snapshot} updater={updater} />
+      );
+    }
+    return <PlaceholderView onNavigate={setActive} section={active} />;
   }
 
   return (
     <div className="app-shell">
       <Sidebar
         active={active}
+        appVersion={updater.currentVersion}
         jobCount={snapshot.jobs.filter((job) => activeJobStates.has(job.status)).length}
         onNavigate={setActive}
       />
@@ -466,6 +487,8 @@ function App() {
           bridge={snapshot.bridge}
           importing={importing}
           onImport={() => void handleImport()}
+          onOpenUpdates={() => setActive("settings")}
+          updater={updater}
         />
         <main className="main-content" aria-busy={loading}>
           {loading ? (
@@ -480,7 +503,7 @@ function App() {
       </div>
 
       {notice ? (
-        <div className="toast" data-tone={notice.tone} role="status">
+        <div className={`toast${showUpdateBanner ? " toast-raised" : ""}`} data-tone={notice.tone} role="status">
           {notice.tone === "success" ? (
             <CheckCircle2 size={19} />
           ) : (
@@ -494,6 +517,13 @@ function App() {
             <X size={16} />
           </button>
         </div>
+      ) : null}
+      {showUpdateBanner ? (
+        <UpdateBanner
+          hasActiveJobs={hasActiveJobs}
+          onOpenSettings={() => setActive("settings")}
+          updater={updater}
+        />
       ) : null}
       {dropActive ? (
         <div className="drop-overlay" role="status">

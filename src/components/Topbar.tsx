@@ -1,5 +1,6 @@
-import { Archive, CloudOff, Cpu } from "lucide-react";
+import { Archive, CloudOff, Cpu, Download, RotateCw } from "lucide-react";
 
+import type { AppUpdater } from "../hooks/useAppUpdater";
 import type { BridgeStatus, SectionId } from "../types";
 
 const sectionTitles: Record<SectionId, string> = {
@@ -17,9 +18,12 @@ interface TopbarProps {
   bridge: BridgeStatus;
   importing: boolean;
   onImport: () => void;
+  onOpenUpdates: () => void;
+  updater: AppUpdater;
 }
 
-export function Topbar({ active, bridge, importing, onImport }: TopbarProps) {
+export function Topbar({ active, bridge, importing, onImport, onOpenUpdates, updater }: TopbarProps) {
+  const showUpdate = ["available", "downloading", "downloaded", "installing", "ready"].includes(updater.phase);
   return (
     <header className="topbar">
       <div>
@@ -27,6 +31,18 @@ export function Topbar({ active, bridge, importing, onImport }: TopbarProps) {
         <h1>{sectionTitles[active]}</h1>
       </div>
       <div className="topbar-actions">
+        {showUpdate ? (
+          <button className="system-pill update-pill" onClick={onOpenUpdates} type="button">
+            {updater.phase === "ready" ? <RotateCw size={14} /> : <Download size={14} />}
+            {updater.phase === "ready"
+              ? "Riavvia per aggiornare"
+              : updater.phase === "downloaded"
+                ? "Pronto da installare"
+              : updater.phase === "downloading"
+                ? `Aggiornamento ${updater.progress === null ? "…" : `${updater.progress}%`}`
+                : `Versione ${updater.availableVersion}`}
+          </button>
+        ) : null}
         <span className="system-pill" data-ready={bridge.available}>
           <Cpu size={14} />
           {bridge.label}

@@ -88,7 +88,7 @@ regressioni.
 - installazione, verifica checksum, update e rollback;
 - benchmark iniziale sul dispositivo e profili Eco/Bilanciato/Max;
 - onboarding guidato e download selettivo;
-- aggiornamenti firmati dell'app;
+- aggiornamenti firmati dell'app (disponibili dalla 0.5; rollback ancora da validare);
 - notarizzazione macOS, firma Windows, SBOM, vulnerability scan e release notes;
 - localizzazioni italiana e inglese complete.
 

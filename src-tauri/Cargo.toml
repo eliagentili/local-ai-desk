@@ -1,6 +1,6 @@
 [package]
 name = "local-ai-desk-2"
-version = "0.4.0-beta.1"
+version = "0.5.0-beta.1"
 description = "A private, local-first AI workspace for macOS and Windows"
 authors = ["Local AI Desk contributors"]
 edition = "2021"
@@ -30,6 +30,8 @@ serde_json = "1"
 sysinfo = "0.39.6"
 tauri = { version = "2.11.5", features = [] }
 tauri-plugin-dialog = "2.7.0"
+tauri-plugin-process = "2.3.1"
+tauri-plugin-updater = "2.10.1"
 tokio = { version = "1.53.1", features = ["fs", "io-util", "macros", "sync", "time"] }
 tokio-util = { version = "0.7.19", features = ["io"] }
 uuid = { version = "1", features = ["v4"] }
