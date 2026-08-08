@@ -31,7 +31,15 @@ fn ollama_models_dir(home: &Path, explicit: Option<String>) -> PathBuf {
 /// Without this, upgrading would leave several gigabytes stranded in the app
 /// container and download them all over again.
 fn migrate_legacy_model_store(legacy: &Path, shared: &Path) {
-    if !legacy.join("blobs").is_dir() || shared.join("blobs").exists() {
+    if !legacy.join("blobs").is_dir() {
+        return;
+    }
+    if shared.join("blobs").exists() {
+        // The shared store already won. Clear the old skeleton away when it
+        // holds nothing, so it does not look like a second copy of the models.
+        let _ = fs::remove_dir(legacy.join("blobs"));
+        let _ = fs::remove_dir(legacy.join("manifests"));
+        let _ = fs::remove_dir(legacy);
         return;
     }
     if let Some(parent) = shared.parent() {
@@ -195,6 +203,23 @@ mod tests {
     }
 
     #[test]
+    fn an_emptied_legacy_store_is_cleared_away() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let legacy = temporary.path().join("engine/models/ollama");
+        let shared = temporary.path().join("home/.ollama/models");
+        fs::create_dir_all(legacy.join("blobs")).expect("legacy skeleton");
+        fs::create_dir_all(legacy.join("manifests")).expect("legacy skeleton");
+        fs::create_dir_all(shared.join("blobs")).expect("shared store");
+
+        migrate_legacy_model_store(&legacy, &shared);
+
+        assert!(
+            !legacy.exists(),
+            "an empty skeleton must not look like a second copy of the models",
+        );
+    }
+
+    #[test]
     fn an_earlier_private_store_is_moved_instead_of_downloaded_again() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let legacy = temporary.path().join("engine/models/ollama");
@@ -220,6 +245,7 @@ mod tests {
         let legacy = temporary.path().join("engine/models/ollama");
         let shared = temporary.path().join("home/.ollama/models");
         fs::create_dir_all(legacy.join("blobs")).expect("legacy store");
+        fs::write(legacy.join("blobs/sha256-nostro"), b"i nostri").expect("blob");
         fs::create_dir_all(shared.join("blobs")).expect("shared store");
         fs::write(shared.join("blobs/sha256-mine"), b"i miei modelli").expect("blob");
 
@@ -229,7 +255,10 @@ mod tests {
             shared.join("blobs/sha256-mine").is_file(),
             "the user's own models are untouched",
         );
-        assert!(legacy.exists(), "and ours are not silently discarded");
+        assert!(
+            legacy.join("blobs/sha256-nostro").is_file(),
+            "and ours are not silently discarded",
+        );
     }
 
     #[test]
