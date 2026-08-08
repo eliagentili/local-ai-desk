@@ -33,6 +33,14 @@ static ENGINE_TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 pub(crate) fn engine_token() -> &'static str {
     ENGINE_TOKEN.get_or_init(|| {
+        // An engine started outside the app — during development, or by an
+        // end-to-end test — already has a token. Adopting it keeps both sides
+        // speaking the same secret instead of guaranteeing a 401.
+        if let Ok(existing) = std::env::var("LOCAL_AI_ENGINE_TOKEN") {
+            if !existing.trim().is_empty() {
+                return existing;
+            }
+        }
         let mut token = String::with_capacity(64);
         for _ in 0..4 {
             token.push_str(&uuid::Uuid::new_v4().simple().to_string());
