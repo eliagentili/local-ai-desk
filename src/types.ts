@@ -87,6 +87,8 @@ export interface RuntimeStatus {
   dataDirectory: string;
   logPath: string;
   runtimeLogPath: string;
+  modelsDirectory: string;
+  modelsServerExposed: boolean;
   message: string;
 }
 

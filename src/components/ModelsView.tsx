@@ -6,6 +6,7 @@ import {
   Layers3,
   LoaderCircle,
   Play,
+  ShieldAlert,
   Square,
 } from "lucide-react";
 
@@ -57,8 +58,12 @@ export function ModelsView({
         </div>
         <div>
           <HardDrive size={19} />
-          <span>Posizione</span>
-          <strong>Solo su {system.platformLabel}</strong>
+          <span>Modelli</span>
+          <strong title={runtime.modelsDirectory}>
+            {runtime.modelsDirectory.includes(".ollama")
+              ? "Condivisi con Ollama"
+              : `Solo su ${system.platformLabel}`}
+          </strong>
         </div>
         <div>
           <Layers3 size={19} />
@@ -122,6 +127,21 @@ export function ModelsView({
           </button>
         )}
       </section>
+
+      {runtime.modelsServerExposed ? (
+        <section className="surface-panel exposure-note" role="status">
+          <ShieldAlert size={19} />
+          <div>
+            <strong>Il servizio modelli è raggiungibile dalla rete</strong>
+            <p>
+              Local AI Desk sta usando un Ollama che non ha avviato lui, configurato per
+              accettare connessioni oltre a quelle di questo computer. I tuoi documenti
+              restano sul dispositivo, ma quel servizio risponde anche ad altri sulla
+              stessa rete. Avvialo con <code>OLLAMA_HOST=127.0.0.1</code> se non è voluto.
+            </p>
+          </div>
+        </section>
+      ) : null}
 
       <section className="model-grid" aria-label="Motori rilevati">
         {bridge.engines.length ? (

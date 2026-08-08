@@ -136,6 +136,10 @@ i soli processi che ha avviato.
 - macOS: `~/Library/Application Support/it.local.localaidesk2/engine`
 - Windows: `%APPDATA%\it.local.localaidesk2\engine`
 
+I modelli Ollama stanno invece in `~/.ollama/models`, dove Ollama stesso li
+tiene: se li hai gia' perche' usi Ollama per altro, non vengono riscaricati, e
+l'installazione salta quasi 10 GB.
+
 ## Sviluppo
 
 Servono Node.js 20+, Rust stable e gli strumenti nativi della piattaforma:

@@ -54,6 +54,22 @@ lavoro la UI mostra correttamente un avanzamento indeterminato. Gli output sono
 scritti dentro il contenitore dell’app e i PDF usano un file parziale rinominato
 solo a completamento.
 
+I modelli Ollama vivono in `~/.ollama/models`, la posizione convenzionale di
+Ollama, non dentro il contenitore dell'app. Sono modelli ufficiali del registro
+e pesano quasi 10 GB: un computer che li ha gia', perche' l'utente usa Ollama
+per altro, non ne scarica una seconda copia, e uno che non li ha se li ritrova
+dove Ollama stesso li avrebbe messi. Il bootstrap salta il download di ogni
+modello gia' presente e sposta lo store privato delle versioni precedenti invece
+di riscaricarlo. Un `OLLAMA_MODELS` impostato dall'utente ha sempre la
+precedenza: chi ha spostato i modelli su un disco esterno ha gia' deciso.
+
+Il processo resta invece nostro: l'app avvia il proprio server con la versione
+pinnata e `OLLAMA_HOST=127.0.0.1`, e lo supervisiona. Se ne trova gia' uno in
+esecuzione lo adotta senza spegnerlo mai, perche' appartiene all'utente; in quel
+caso verifica se accetta connessioni oltre a quelle locali e lo segnala in
+Modelli — i documenti restano comunque sul dispositivo, ma quel servizio
+risponde anche ad altri sulla stessa rete.
+
 Il bundle contiene sorgenti e bootstrap comuni, ma non scrive mai nella propria
 directory di installazione. Tauri risolve le risorse in `.app/Contents/Resources`
 su macOS e accanto ai file installati sotto Windows; venv, tool, cache e modelli

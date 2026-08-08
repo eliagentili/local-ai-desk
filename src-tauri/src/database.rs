@@ -19,6 +19,11 @@ pub struct AppState {
     pub downloads_dir: PathBuf,
     pub engine_resource_dir: PathBuf,
     pub engine_data_dir: PathBuf,
+    /// Where Ollama keeps its models. Shared with the user's own Ollama rather
+    /// than duplicated inside the app container: these are official registry
+    /// models, often several gigabytes, and a machine that already has them
+    /// should never download a second copy.
+    pub ollama_models_dir: PathBuf,
     pub runtime_process: Arc<Mutex<Option<Child>>>,
     pub ollama_process: Arc<Mutex<Option<Child>>>,
     pub installer_process: Arc<Mutex<Option<Child>>>,

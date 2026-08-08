@@ -73,6 +73,8 @@ const emptyRuntime: RuntimeStatus = {
   dataDirectory: "—",
   logPath: "—",
   runtimeLogPath: "—",
+  modelsDirectory: "—",
+  modelsServerExposed: false,
   message: "Verifica del runtime…",
 };
 

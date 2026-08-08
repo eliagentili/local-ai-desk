@@ -101,8 +101,32 @@ if (-not (Test-Path $OllamaBin)) {
   Assert-Sha256 -Path $OllamaArchive -Expected $OllamaSha256
   Expand-Archive -Path $OllamaArchive -DestinationPath $OllamaDir -Force
 }
-$env:OLLAMA_MODELS = Join-Path $DataDir "models\ollama"
+# Share Ollama's conventional per-user store instead of keeping a private copy
+# inside the app container: several GB of official registry models must not be
+# downloaded twice on a machine that already has them.
+if (-not $env:OLLAMA_MODELS) {
+  $env:OLLAMA_MODELS = Join-Path $HOME ".ollama\models"
+}
 New-Item -ItemType Directory -Force -Path $env:OLLAMA_MODELS | Out-Null
+
+# An earlier version kept its own store; move it rather than re-downloading.
+$LegacyModels = Join-Path $DataDir "models\ollama"
+if ((Test-Path (Join-Path $LegacyModels "blobs")) -and
+    -not (Test-Path (Join-Path $env:OLLAMA_MODELS "blobs"))) {
+  Write-Output "Riuso i modelli gia' scaricati"
+  Get-ChildItem -Force $LegacyModels | Move-Item -Destination $env:OLLAMA_MODELS -Force -ErrorAction SilentlyContinue
+}
+
+function Confirm-Model {
+  param([Parameter(Mandatory = $true)][string]$Reference)
+  # `show` succeeds only when the model is already present locally.
+  & $OllamaBin show $Reference *> $null
+  if ($LASTEXITCODE -eq 0) {
+    Write-Output "Modello gia' presente: $Reference"
+  } else {
+    Invoke-Native -Exe $OllamaBin -Arguments @("pull", $Reference)
+  }
+}
 $OllamaWasRunning = $false
 try {
   Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 -Uri "http://127.0.0.1:11434/api/tags" | Out-Null
@@ -121,8 +145,8 @@ if (-not $OllamaWasRunning) {
 # Everything that needs the temporary Ollama runs inside this try, so a failed
 # pull cannot leave a stray `ollama serve` behind holding port 11434.
 try {
-  Invoke-Native -Exe $OllamaBin -Arguments @("pull", "glm-ocr")
-  Invoke-Native -Exe $OllamaBin -Arguments @("pull", "translategemma:12b")
+  Confirm-Model -Reference "glm-ocr"
+  Confirm-Model -Reference "translategemma:12b"
 
   Write-Output "[6/6] Modelli documentali e audio"
   Push-Location $DataDir

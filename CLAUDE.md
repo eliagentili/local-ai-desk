@@ -94,6 +94,9 @@ PYTHONPATH=engine python -m unittest discover -s engine/tests -v
   supervisore è disattivato e un crash dell'app lascia motori e modelli accesi
   sul computer dell'utente. Serve anche `LOCAL_AI_ENGINE_TOKEN`, altrimenti il
   backend rifiuta ogni richiesta con 503.
+- **Non riportare i modelli Ollama dentro la cartella dell'app.** Stanno in
+  `~/.ollama/models` di proposito: sono modelli ufficiali del registro da quasi
+  10 GB e duplicarli e' tempo e disco buttati. Il processo invece resta nostro.
 - **Non archiviare le sorgenti del Drop rapido.** Restano fuori dal database per
   scelta: è il motivo per cui il retry funziona solo su fonti in Libreria.
 - **Non aggiungere client HTTP verso i motori senza token**: usa

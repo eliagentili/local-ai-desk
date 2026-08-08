@@ -93,6 +93,13 @@ pub struct RuntimeStatus {
     pub data_directory: String,
     pub log_path: String,
     pub runtime_log_path: String,
+    /// Where the models actually live, so the user can see they are shared
+    /// with their own Ollama rather than duplicated inside the app.
+    pub models_directory: String,
+    /// The adopted model server also answers on the network. Not a leak — the
+    /// documents still go to localhost — but the user's own configuration
+    /// deserves to be visible rather than silently relied upon.
+    pub models_server_exposed: bool,
     pub message: String,
 }
 

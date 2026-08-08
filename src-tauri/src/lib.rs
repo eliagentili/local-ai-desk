@@ -4,10 +4,43 @@ mod engine_bridge;
 mod models;
 mod process;
 
-use std::{collections::HashMap, fs, path::Path, sync::Arc};
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use database::AppState;
 use tauri::Manager;
+
+/// Ollama's conventional per-user model store.
+///
+/// An explicit `OLLAMA_MODELS` always wins: a user who moved their models to an
+/// external disk has already made this decision, and overriding it would both
+/// ignore them and waste the space again.
+fn ollama_models_dir(home: &Path, explicit: Option<String>) -> PathBuf {
+    match explicit {
+        Some(path) if !path.trim().is_empty() => PathBuf::from(path),
+        _ => home.join(".ollama").join("models"),
+    }
+}
+
+/// Move a model store written by an earlier version into the shared location.
+///
+/// Without this, upgrading would leave several gigabytes stranded in the app
+/// container and download them all over again.
+fn migrate_legacy_model_store(legacy: &Path, shared: &Path) {
+    if !legacy.join("blobs").is_dir() || shared.join("blobs").exists() {
+        return;
+    }
+    if let Some(parent) = shared.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    // A rename across the same volume is instant; a failure just means the next
+    // install re-pulls, which is wasteful but never wrong.
+    let _ = fs::rename(legacy, shared);
+}
 
 /// A `.partial` file is a result that was being streamed when the app stopped.
 /// It is never a finished output, so removing it at launch keeps the results
@@ -72,6 +105,15 @@ pub fn run() {
                 .map_err(|error| format!("Impossibile inizializzare il database: {error}"))?;
             sweep_partial_results(&results_dir);
 
+            let engine_data_dir = data_dir.join("engine");
+            let home_dir = app.path().home_dir().unwrap_or_else(|_| data_dir.clone());
+            let ollama_models_dir =
+                ollama_models_dir(&home_dir, std::env::var("OLLAMA_MODELS").ok());
+            migrate_legacy_model_store(
+                &engine_data_dir.join("models").join("ollama"),
+                &ollama_models_dir,
+            );
+
             let resource_dir = app
                 .path()
                 .resource_dir()
@@ -82,7 +124,8 @@ pub fn run() {
                 results_dir,
                 downloads_dir,
                 engine_resource_dir: resource_dir.join("engine"),
-                engine_data_dir: data_dir.join("engine"),
+                engine_data_dir,
+                ollama_models_dir,
                 runtime_process: Arc::new(std::sync::Mutex::new(None)),
                 ollama_process: Arc::new(std::sync::Mutex::new(None)),
                 installer_process: Arc::new(std::sync::Mutex::new(None)),
@@ -125,4 +168,87 @@ pub fn run() {
             commands::stop_engine_processes(&app_handle.state::<AppState>());
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn models_live_where_ollama_itself_would_put_them() {
+        let home = Path::new("/Users/prova");
+        assert_eq!(
+            ollama_models_dir(home, None),
+            Path::new("/Users/prova/.ollama/models"),
+        );
+        // A user who moved their models to an external disk already decided
+        // this; overriding would ignore them and spend the space again.
+        assert_eq!(
+            ollama_models_dir(home, Some("/Volumi/Esterno/models".to_string())),
+            Path::new("/Volumi/Esterno/models"),
+        );
+        assert_eq!(
+            ollama_models_dir(home, Some("   ".to_string())),
+            Path::new("/Users/prova/.ollama/models"),
+            "an empty override is not a choice",
+        );
+    }
+
+    #[test]
+    fn an_earlier_private_store_is_moved_instead_of_downloaded_again() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let legacy = temporary.path().join("engine/models/ollama");
+        let shared = temporary.path().join("home/.ollama/models");
+        fs::create_dir_all(legacy.join("blobs")).expect("legacy store");
+        fs::write(legacy.join("blobs/sha256-abc"), b"pesi").expect("blob");
+
+        migrate_legacy_model_store(&legacy, &shared);
+
+        assert!(
+            shared.join("blobs/sha256-abc").is_file(),
+            "models are reused"
+        );
+        assert!(
+            !legacy.exists(),
+            "nothing is left behind to confuse the next run"
+        );
+    }
+
+    #[test]
+    fn an_existing_shared_store_is_never_overwritten() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let legacy = temporary.path().join("engine/models/ollama");
+        let shared = temporary.path().join("home/.ollama/models");
+        fs::create_dir_all(legacy.join("blobs")).expect("legacy store");
+        fs::create_dir_all(shared.join("blobs")).expect("shared store");
+        fs::write(shared.join("blobs/sha256-mine"), b"i miei modelli").expect("blob");
+
+        migrate_legacy_model_store(&legacy, &shared);
+
+        assert!(
+            shared.join("blobs/sha256-mine").is_file(),
+            "the user's own models are untouched",
+        );
+        assert!(legacy.exists(), "and ours are not silently discarded");
+    }
+
+    #[test]
+    fn only_partial_results_are_swept_from_the_results_folder() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let results = temporary.path();
+        let finished = results.join("job-completo");
+        let interrupted = results.join("job-interrotto");
+        fs::create_dir_all(&finished).expect("job dir");
+        fs::create_dir_all(&interrupted).expect("job dir");
+        fs::write(finished.join("risultato.md"), b"esito").expect("result");
+        fs::write(interrupted.join(".abc123.partial"), b"a meta").expect("partial");
+
+        sweep_partial_results(results);
+
+        assert!(
+            finished.join("risultato.md").is_file(),
+            "a real result survives"
+        );
+        assert!(!interrupted.exists(), "an empty job folder is cleared away");
+    }
 }

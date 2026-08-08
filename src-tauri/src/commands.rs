@@ -193,6 +193,47 @@ fn loopback_ollama_available() -> bool {
     std::net::TcpStream::connect_timeout(&address, Duration::from_millis(120)).is_ok()
 }
 
+/// Is the model server on this port reachable from outside this machine?
+///
+/// A server started with `OLLAMA_HOST=0.0.0.0` answers on 127.0.0.1 exactly
+/// like a loopback-only one, so the plain connection check cannot tell them
+/// apart. The user's documents still never leave the device — the request goes
+/// to localhost either way — but the server we route through is also reachable
+/// by anyone on the same network, which the user deserves to be told.
+fn listener_is_network_exposed(port: u16) -> bool {
+    #[cfg(unix)]
+    {
+        let Ok(output) = Command::new("lsof")
+            .args(["-nP", "-sTCP:LISTEN", &format!("-iTCP:{port}")])
+            .output()
+        else {
+            return false;
+        };
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .skip(1)
+            .any(|line| line.contains("*:") || line.contains("0.0.0.0:"))
+    }
+    #[cfg(windows)]
+    {
+        let mut command = Command::new("netstat.exe");
+        command.args(["-an", "-p", "TCP"]);
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        let Ok(output) = command.output() else {
+            return false;
+        };
+        let needle = format!(":{port}");
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| line.contains("LISTENING") && line.contains(&needle))
+            .any(|line| line.contains("0.0.0.0:") || line.contains("[::]:"))
+    }
+}
+
 fn spawn_ollama_process(state: &AppState) -> Result<(), String> {
     if loopback_ollama_available() || process_is_running(&state.ollama_process) {
         return Ok(());
@@ -216,8 +257,8 @@ fn spawn_ollama_process(state: &AppState) -> Result<(), String> {
     if !executable.is_file() {
         return Ok(());
     }
-    let models = state.engine_data_dir.join("models").join("ollama");
-    fs::create_dir_all(&models).map_err(|error| error.to_string())?;
+    let models = &state.ollama_models_dir;
+    fs::create_dir_all(models).map_err(|error| error.to_string())?;
     let ollama_log = state.engine_data_dir.join("ollama.log");
     rotate_log_if_large(&ollama_log);
     let stdout = append_log(&ollama_log)?;
@@ -386,6 +427,12 @@ pub async fn get_runtime_status(state: State<'_, AppState>) -> Result<RuntimeSta
             .join("runtime.log")
             .to_string_lossy()
             .into_owned(),
+        models_directory: state.ollama_models_dir.to_string_lossy().into_owned(),
+        // Only meaningful for a server we adopted: the one we start ourselves is
+        // pinned to the loopback interface.
+        models_server_exposed: !process_is_running(&state.ollama_process)
+            && loopback_ollama_available()
+            && listener_is_network_exposed(11434),
         message: if running {
             "Motori locali attivi".to_string()
         } else if installing {
