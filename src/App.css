@@ -499,7 +499,7 @@ button {
   border-radius: 20px;
   background:
     radial-gradient(circle at 50% 30%, rgba(183, 244, 59, 0.2), transparent 54%),
-    rgba(255, 255, 255, 0.45);
+    var(--panel-wash-flat);
   cursor: pointer;
   transition:
     transform 170ms ease,
@@ -1847,7 +1847,7 @@ tbody tr:last-child td {
   border-radius: 22px;
   background:
     radial-gradient(circle at 87% 14%, rgba(183, 244, 59, 0.25), transparent 32%),
-    rgba(255, 255, 255, 0.56);
+    var(--panel-wash-flat);
   box-shadow: var(--shadow);
 }
 
@@ -1922,7 +1922,7 @@ tbody tr:last-child td {
 }
 
 .signed-badge {
-  color: #5f8500;
+  color: #4a6800;
   border-color: rgba(121, 171, 15, 0.28);
   background: rgba(183, 244, 59, 0.12);
 }
@@ -2826,8 +2826,8 @@ tbody tr:last-child td {
   :root {
     --ink: #eaf1ed;
     --ink-soft: #c3d0cb;
-    /* 7.0:1 on --canvas. */
-    --muted: #9dada8;
+    /* 7.6:1 on --canvas, and still >= 4.5:1 on the lightest raised surface. */
+    --muted: #a7b6b1;
     --canvas: #101a1d;
     --paper: #172326;
     --paper-strong: #213034;
@@ -2879,10 +2879,6 @@ tbody tr:last-child td {
   .button-primary,
   .file-badge {
     color: #0d1d22;
-  }
-
-  .hero-copy h2 span {
-    -webkit-text-stroke-color: var(--ink);
   }
 }
 
