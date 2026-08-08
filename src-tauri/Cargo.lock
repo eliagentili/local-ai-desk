@@ -1910,6 +1910,7 @@ dependencies = [
  "blake3",
  "chrono",
  "futures-util",
+ "libc",
  "reqwest",
  "rusqlite",
  "serde",

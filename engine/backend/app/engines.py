@@ -7,7 +7,6 @@ import json
 import os
 import platform
 import re
-import signal
 import subprocess
 import tempfile
 import threading
@@ -256,15 +255,18 @@ def _stop_translation_process(process: subprocess.Popen) -> None:
             if process.poll() is None:
                 process.kill()
         return
+    # The worker shares this server's process group so the desktop app can stop
+    # the whole tree at once. Signalling the group here would therefore also
+    # kill this server, so the worker is signalled directly.
+    process.terminate()
     try:
-        os.killpg(process.pid, signal.SIGTERM)
         process.wait(timeout=5)
-    except (ProcessLookupError, subprocess.TimeoutExpired):
-        if process.poll() is None:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+    except subprocess.TimeoutExpired:
+        process.kill()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
 
 
 def cancel_all_translation_processes() -> None:
@@ -306,7 +308,7 @@ def translate_pdf(
     cli = find_binary("pdf2zh_next")
     if not cli:
         raise RuntimeError(
-            "PDFMathTranslate non è installato. Esegui scripts/setup-translation.sh."
+            "Il motore di traduzione PDF non è installato. Apri Modelli e completa\n            l'installazione del runtime locale."
         )
     try:
         tags = _ollama_request("/api/tags")
@@ -392,8 +394,9 @@ def translate_pdf(
             process_options["creationflags"] = getattr(
                 subprocess, "CREATE_NEW_PROCESS_GROUP", 0
             ) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        else:
-            process_options["start_new_session"] = True
+        # On POSIX the worker deliberately stays in this server's process group:
+        # the desktop app terminates that group on quit, which is the only way a
+        # multi-minute translation cannot outlive the window that started it.
         process = subprocess.Popen(command, **process_options)
         with _TRANSLATION_PROCESSES_LOCK:
             _TRANSLATION_PROCESSES.add(process)
@@ -483,7 +486,7 @@ def convert_markitdown(
         from markitdown import MarkItDown
     except ImportError as exc:
         raise RuntimeError(
-            "MarkItDown non è installato. Esegui scripts/setup-local.sh."
+            "Il motore di conversione documenti non è installato. Apri Modelli e\n            completa l'installazione del runtime locale."
         ) from exc
 
     result = MarkItDown(enable_plugins=False).convert(str(path))
@@ -507,10 +510,17 @@ def convert_docling(
     try:
         from docling.document_converter import DocumentConverter
     except ImportError as exc:
-        raise RuntimeError("Docling non è installato.") from exc
+        raise RuntimeError(
+            "Il motore documentale avanzato non è installato. Apri Modelli e "
+            "completa l'installazione del runtime locale."
+        ) from exc
     result = DocumentConverter().convert(str(path))
     _raise_if_cancelled(cancel_event)
     output = result.document.export_to_markdown()
+    if not output.strip():
+        raise RuntimeError(
+            "Nessun testo estratto da questo documento: prova con «Forza OCR»."
+        )
     return EngineResult(
         output=output,
         engine="Docling",
@@ -525,7 +535,7 @@ def _paddle_pipeline():
         from paddleocr import PPStructureV3
     except ImportError as exc:
         raise RuntimeError(
-            "PaddleOCR non è installato. Esegui scripts/setup-local.sh."
+            "Il motore OCR non è installato. Apri Modelli e completa l'installazione\n            del runtime locale."
         ) from exc
 
     options: dict[str, Any] = {
@@ -662,7 +672,7 @@ def convert_glm(
         _ollama_request("/api/tags")
     except Exception as exc:
         raise RuntimeError(
-            "Ollama non è in esecuzione. Avvia prima scripts/start-ollama.sh."
+            "Il servizio locale dei modelli non è avviato. Apri Modelli e premi\n            «Avvia motori»."
         ) from exc
 
     with tempfile.TemporaryDirectory(prefix="glm-pages-") as raw_dir:
@@ -673,6 +683,7 @@ def convert_glm(
             else [path]
         )
         outputs: list[str] = []
+        recognised: list[str] = []
         for index, page in enumerate(pages):
             _raise_if_cancelled(cancel_event)
             image = base64.b64encode(page.read_bytes()).decode("ascii")
@@ -694,7 +705,14 @@ def convert_glm(
                 detail = exc.read().decode("utf-8", errors="replace")
                 raise RuntimeError(f"GLM-OCR ha restituito un errore: {detail}") from exc
             _raise_if_cancelled(cancel_event)
-            outputs.append(f"<!-- pagina {index + 1} -->\n\n{response.get('response', '')}")
+            page_text = str(response.get("response", ""))
+            recognised.append(page_text)
+            outputs.append(f"<!-- pagina {index + 1} -->\n\n{page_text}")
+
+    # Check the raw model replies: `outputs` always contains the page comments,
+    # so it is never empty even when nothing at all was recognised.
+    if not any(chunk.strip() for chunk in recognised):
+        raise RuntimeError("GLM-OCR non ha riconosciuto testo in nessuna pagina.")
 
     output = "\n\n---\n\n".join(outputs)
     return EngineResult(
@@ -719,7 +737,7 @@ def _whisper_model():
             from faster_whisper import WhisperModel
         except ImportError as exc:
             raise RuntimeError(
-                "Faster Whisper non è installato. Esegui scripts/setup-local.sh."
+                "Il motore di trascrizione non è installato. Apri Modelli e completa\n            l'installazione del runtime locale."
             ) from exc
         _WHISPER_MODEL_INSTANCE = WhisperModel(
             WHISPER_MODEL,
@@ -760,6 +778,14 @@ def transcribe(
         _raise_if_cancelled(cancel_event)
         segments.append(segment)
     _raise_if_cancelled(cancel_event)
+
+    # An empty transcript is a failed job, not a finished one: reporting it as a
+    # result would hand the user an empty file and call it done.
+    if not segments:
+        raise RuntimeError(
+            "Nessun parlato riconosciuto: verifica che il file contenga una traccia "
+            "audio con voce, oppure indica esplicitamente la lingua."
+        )
 
     if output_format == "json":
         output = json.dumps(
@@ -860,7 +886,11 @@ def _privacy_filter():
 def _opf_redact(text: str) -> tuple[str, list[dict[str, Any]], str | None]:
     opf = find_binary("opf")
     if not opf:
-        return text, [], "OpenAI Privacy Filter non è installato: ho usato le regole italiane locali."
+        return text, [], (
+            "Il modello Privacy Filter non è installato: sono state applicate soltanto "
+            "le regole italiane locali. Completa l'installazione da Modelli per una "
+            "copertura più ampia."
+        )
 
     try:
         result = _privacy_filter().redact(text)
@@ -872,7 +902,8 @@ def _opf_redact(text: str) -> tuple[str, list[dict[str, Any]], str | None]:
         )
     except Exception:
         return text, [], (
-            "OpenAI Privacy Filter non era disponibile; ho applicato il rilevamento italiano."
+            "Il modello Privacy Filter non ha risposto: sono state applicate soltanto "
+            "le regole italiane locali."
         )
 
 
@@ -909,7 +940,13 @@ def protect_text(
         output = redacted
     return EngineResult(
         output=output,
-        engine="OpenAI Privacy Filter + rilevatori italiani",
+        # Name the engine that actually ran: claiming the full filter when only
+        # the regex rules were available would overstate the protection applied.
+        engine=(
+            "Regole italiane locali (modello Privacy Filter non disponibile)"
+            if warning
+            else "Privacy Filter + rilevatori italiani"
+        ),
         output_format=output_format,
         warnings=warnings,
         meta={"detected_spans": len(safe_spans)},

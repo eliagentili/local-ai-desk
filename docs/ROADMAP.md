@@ -46,7 +46,8 @@ Stato: **prima release utilizzabile nella 0.2**.
 - upload in streaming e limite globale di tre lavori; **completato**;
 - drag & drop rapido senza persistenza delle sorgenti e con pulizia automatica;
   **completato**;
-- pausa, riprendi e retry; **da completare**;
+- retry di un lavoro non riuscito, con fonte in Libreria; **completato**;
+- pausa e riprendi; **da completare**;
 - scheduler adattivo a memoria e termiche; **da completare**;
 - notifiche native e cronologia eventi visibile; **da completare**.
 

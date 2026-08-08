@@ -7,10 +7,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
 from fastapi import Response
 
 from backend.app import main
+from support import local_client
 from backend.app.engines import (
     EngineResult,
     PDFTranslationResult,
@@ -44,7 +44,7 @@ class StreamingUploadTests(unittest.TestCase):
             )
 
     def test_raw_upload_is_streamed_and_processed(self):
-        client = TestClient(main.app)
+        client = local_client()
         result = EngineResult(output="testo", engine="fake", output_format="txt")
         with patch.object(main, "process_file", return_value=result):
             response = client.post(
@@ -97,7 +97,7 @@ class StreamingUploadTests(unittest.TestCase):
             main.unregister_job(job_id)
 
     def test_pdf_translation_streams_a_binary_result(self):
-        client = TestClient(main.app)
+        client = local_client()
 
         def fake_translation(
             source,

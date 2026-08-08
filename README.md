@@ -60,7 +60,7 @@ modificati. Rimangono soltanto i risultati che hai scelto di creare.
 | **Traduci PDF** | PDF tradotto o bilingue con layout, immagini e formule | PDFMathTranslate 2 + TranslateGemma |
 | **Forza OCR** | Markdown, testo o JSON da scansioni e immagini | PaddleOCR / GLM-OCR |
 | **Trascrivi** | Testo, sottotitoli SRT o JSON da audio e video | Faster Whisper |
-| **Proteggi dati** | Testo mascherato o JSON con i rilevamenti | Presidio + regole italiane |
+| **Proteggi dati** | Testo mascherato o JSON con i rilevamenti | OpenAI Privacy Filter (locale) + regole italiane |
 
 ![Attività completata con risultato locale](docs/screenshots/f1-activity-completed.png)
 
@@ -82,16 +82,20 @@ l'originale o i risultati.
 - upload in streaming e hash BLAKE3 incrementale, senza caricare file enormi in RAM;
 - avanzamento reale quando il motore lo espone e stato onesto negli altri casi;
 - annullamento per singolo lavoro o per tutto il batch;
-- risultati atomici e ZIP con manifest JSON;
+- riavvio di un lavoro non riuscito con le stesse impostazioni, dalla Libreria;
+- risultati atomici in ogni formato e ZIP con manifest JSON;
 - runtime e motori in background, senza finestre Terminal o PowerShell;
 - dati, modelli e cache nel profilo dell'utente;
 - aggiornamenti firmati Ed25519 con controllo automatico, progresso e riavvio esplicito;
+- motori raggiungibili solo con il token generato all'avvio, mai da una pagina web;
+- alla chiusura viene terminato l'intero albero dei processi avviati dall'app;
 - CSP restrittiva, CI multipiattaforma, CodeQL, SBOM e checksum di release;
-- interfaccia responsive, utilizzabile da tastiera e rispettosa del movimento ridotto.
+- tema chiaro e scuro, tastiera, scorciatoie native e movimento ridotto.
 
-Pausa/ripresa, retry, notifiche, preview/editor e workflow visuali sono nella
+Pausa/ripresa, notifiche, preview/editor e workflow visuali sono nella
 [roadmap](docs/ROADMAP.md). Le funzioni non complete non vengono presentate come
-se lo fossero.
+se lo fossero. Il riavvio di un lavoro richiede una fonte in Libreria: i file del
+Drop rapido non vengono archiviati, quindi vanno trascinati di nuovo.
 
 ## Download della beta
 

@@ -40,6 +40,9 @@ pub struct Job {
     pub output_mime: Option<String>,
     pub engine: Option<String>,
     pub elapsed_seconds: Option<f64>,
+    /// Degradations reported by the engine: the result exists, but not at full
+    /// quality. Shown next to the result so "completed" is never misleading.
+    pub warnings: Vec<String>,
     pub error: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -89,6 +92,7 @@ pub struct RuntimeStatus {
     pub installing: bool,
     pub data_directory: String,
     pub log_path: String,
+    pub runtime_log_path: String,
     pub message: String,
 }
 

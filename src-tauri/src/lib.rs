@@ -2,11 +2,39 @@ mod commands;
 mod database;
 mod engine_bridge;
 mod models;
+mod process;
 
-use std::{collections::HashMap, fs, sync::Arc};
+use std::{collections::HashMap, fs, path::Path, sync::Arc};
 
 use database::AppState;
 use tauri::Manager;
+
+/// A `.partial` file is a result that was being streamed when the app stopped.
+/// It is never a finished output, so removing it at launch keeps the results
+/// folder free of debris without ever touching a real result.
+fn sweep_partial_results(results_dir: &Path) {
+    let Ok(entries) = fs::read_dir(results_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let job_dir = entry.path();
+        if !job_dir.is_dir() {
+            continue;
+        }
+        let Ok(files) = fs::read_dir(&job_dir) else {
+            continue;
+        };
+        for file in files.flatten() {
+            let name = file.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with('.') && name.ends_with(".partial") {
+                let _ = fs::remove_file(file.path());
+            }
+        }
+        // Only succeeds when nothing else is left, so finished results survive.
+        let _ = fs::remove_dir(&job_dir);
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -31,6 +59,7 @@ pub fn run() {
             let database_path = data_dir.join("local-ai-desk.sqlite3");
             database::initialize(&database_path)
                 .map_err(|error| format!("Impossibile inizializzare il database: {error}"))?;
+            sweep_partial_results(&results_dir);
 
             let resource_dir = app
                 .path()
@@ -64,33 +93,25 @@ pub fn run() {
             commands::get_runtime_status,
             commands::install_engine_runtime,
             commands::start_engine_runtime,
+            commands::stop_engine_runtime,
             commands::list_jobs,
             commands::start_jobs,
+            commands::retry_job,
             commands::cancel_job,
             commands::cancel_all_jobs,
             commands::export_results,
             commands::reveal_job_result,
+            commands::reveal_path,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Local AI Desk");
 
     application.run(|app_handle, event| {
         if let tauri::RunEvent::Exit = event {
-            let state = app_handle.state::<AppState>();
-            if let Ok(mut process) = state.runtime_process.lock() {
-                if let Some(child) = process.as_mut() {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                }
-                *process = None;
-            }
-            if let Ok(mut process) = state.ollama_process.lock() {
-                if let Some(child) = process.as_mut() {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                }
-                *process = None;
-            };
+            // Terminating the whole process group — not just the direct child —
+            // is what stops the engine runtime from leaving translation workers
+            // and model servers running after the window closes.
+            commands::stop_engine_processes(&app_handle.state::<AppState>());
         }
     });
 }

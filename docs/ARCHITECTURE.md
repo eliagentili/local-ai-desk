@@ -70,19 +70,29 @@ Le differenze di sistema sono circoscritte agli adapter nativi:
 
 ## Contratto dei job
 
-Stati ammessi:
+Stati implementati:
 
 ```text
-draft → queued → preparing → running → finalizing → completed
-                    │            │
-                    ├─ paused    ├─ cancelling → cancelled
-                    └─ failed ←──┘
+queued → preparing → uploading → running → finalizing → completed
+   │          │           │          │
+   │          └───────────┴──────────┴── cancelling → cancelled
+   ├── failed
+   └── interrupted        (era attivo alla chiusura dell'app)
 ```
 
-Ogni transizione dovrà essere atomica e accompagnata da un evento persistente.
-La percentuale sarà deterministica quando il motore fornisce unità di lavoro
-(pagine, segmenti, chunk); altrimenti la UI mostrerà una fase indeterminata senza
-inventare una percentuale.
+`completed`, `failed`, `cancelled` e `interrupted` sono terminali: il database
+rifiuta ogni transizione che tenti di uscirne, così un annullamento che arriva
+dopo il salvataggio non può bloccare un lavoro concluso. Da `failed`,
+`cancelled` e `interrupted` si può tornare in `queued` soltanto con un riavvio
+esplicito dell'utente, possibile quando la fonte è in Libreria.
+
+`paused` non esiste ancora: pausa e ripresa sono in [roadmap](ROADMAP.md) F1.
+
+Ogni transizione è atomica e accompagnata da un evento persistente in
+`job_events`, potato a 200 eventi per lavoro all'avvio. La percentuale è
+deterministica quando il motore fornisce unità di lavoro (pagine, segmenti,
+chunk); altrimenti la UI mostra una fase indeterminata senza inventare un
+numero.
 
 ## Confini di sicurezza
 
@@ -91,4 +101,12 @@ inventare una percentuale.
 - path canonicalizzati e verificati prima dell'indicizzazione o del job rapido;
 - database in WAL, foreign key abilitate e timeout di concorrenza;
 - nessuna shell generica esposta alla UI;
+- token casuale per sessione fra core e motori: il backend su `127.0.0.1:8787`
+  rifiuta ogni richiesta priva del token e ogni richiesta con header `Origin`,
+  quindi nessun'altra applicazione — né una pagina aperta nel browser — può
+  inviargli documenti o interromperne i lavori;
+- alla chiusura l'app termina l'intero process group dei motori, prima con
+  SIGTERM e poi a forza: nessun worker di traduzione sopravvive alla finestra;
+- i file di lavoro rimasti da una sessione interrotta vengono rimossi all'avvio
+  successivo, insieme ai risultati `.partial` incompleti;
 - futuro download dei pack con firma, checksum e manifest bloccato per versione.

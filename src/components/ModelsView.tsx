@@ -1,16 +1,36 @@
-import { Cpu, Download, HardDrive, Layers3, LoaderCircle, Play } from "lucide-react";
+import {
+  Cpu,
+  Download,
+  FileText,
+  HardDrive,
+  Layers3,
+  LoaderCircle,
+  Play,
+  Square,
+} from "lucide-react";
 
 import { engineName } from "../lib/format";
 import type { BridgeStatus, RuntimeStatus, SystemSnapshot } from "../types";
 
 interface ModelsViewProps {
   bridge: BridgeStatus;
+  hasActiveJobs: boolean;
   runtime: RuntimeStatus;
   system: SystemSnapshot;
+  onOpenLog: (path: string) => void;
   onRuntimeAction: () => void;
+  onStopRuntime: () => void;
 }
 
-export function ModelsView({ bridge, runtime, system, onRuntimeAction }: ModelsViewProps) {
+export function ModelsView({
+  bridge,
+  hasActiveJobs,
+  runtime,
+  system,
+  onOpenLog,
+  onRuntimeAction,
+  onStopRuntime,
+}: ModelsViewProps) {
   return (
     <div className="view-stack">
       <section className="view-intro">
@@ -45,18 +65,43 @@ export function ModelsView({ bridge, runtime, system, onRuntimeAction }: ModelsV
         </div>
       </div>
 
-      {!bridge.available ? (
-        <section className="surface-panel runtime-card" aria-live="polite">
-          <div>
-            <span className="eyebrow">Runtime per {runtime.platform}</span>
-            <h3>{runtime.message}</h3>
-            <p>
-              L’installazione iniziale comprende OCR, trascrizione, conversione,
-              Privacy Filter, traduzione PDF e i relativi modelli. Richiede una
-              connessione e può occupare oltre 20 GB; continua senza aprire terminali.
-            </p>
-            <small>Attività dettagliata: {runtime.logPath}</small>
+      <section className="surface-panel runtime-card" aria-live="polite">
+        <div>
+          <span className="eyebrow">Runtime per {runtime.platform}</span>
+          <h3>{runtime.message}</h3>
+          <p>
+            {bridge.available
+              ? "I motori girano solo sul loopback del dispositivo. Puoi fermarli quando non ti servono: nessun lavoro parte finché non li riavvii."
+              : "L’installazione iniziale comprende OCR, trascrizione, conversione, Privacy Filter, traduzione PDF e i relativi modelli. Richiede una connessione e può occupare oltre 20 GB; continua senza aprire terminali."}
+          </p>
+          <div className="runtime-logs">
+            <button
+              className="text-button"
+              onClick={() => onOpenLog(runtime.logPath)}
+              type="button"
+            >
+              <FileText size={13} /> Log di installazione
+            </button>
+            <button
+              className="text-button"
+              onClick={() => onOpenLog(runtime.runtimeLogPath)}
+              type="button"
+            >
+              <FileText size={13} /> Log dei motori
+            </button>
           </div>
+        </div>
+        {bridge.available ? (
+          <button
+            className="button button-secondary"
+            disabled={hasActiveJobs}
+            onClick={onStopRuntime}
+            title={hasActiveJobs ? "Attendi la fine dei lavori attivi" : undefined}
+            type="button"
+          >
+            <Square size={16} /> Ferma motori
+          </button>
+        ) : (
           <button
             className="button button-primary"
             disabled={!runtime.supported || runtime.installing}
@@ -71,8 +116,8 @@ export function ModelsView({ bridge, runtime, system, onRuntimeAction }: ModelsV
               <><Download size={16} /> Installa motori</>
             )}
           </button>
-        </section>
-      ) : null}
+        )}
+      </section>
 
       <section className="model-grid" aria-label="Motori rilevati">
         {bridge.engines.length ? (

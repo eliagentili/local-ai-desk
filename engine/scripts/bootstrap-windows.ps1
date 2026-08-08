@@ -13,6 +13,21 @@ $OllamaVersion = "v0.32.6"
 $OllamaSha256 = "756dd7e41fbde34b8869bd7106d626d913a566cce4d0a95a61aa0579f455ddbc"
 $PrivacySha256 = "024fbe180ad5f327e3222246dad08d048dabb39d7cec5e00ee20fb8bbed66210"
 
+# $ErrorActionPreference does not apply to native executables on Windows
+# PowerShell 5.1: without an explicit check, a failed `--require-hashes` install
+# is silently ignored and `.ready` is written over a broken runtime.
+function Invoke-Native {
+  param(
+    [Parameter(Mandatory = $true)][string]$Exe,
+    [string[]]$Arguments = @(),
+    [int[]]$AllowedExitCodes = @(0)
+  )
+  & $Exe @Arguments
+  if ($AllowedExitCodes -notcontains $LASTEXITCODE) {
+    throw "Comando non riuscito (codice $LASTEXITCODE): $Exe $($Arguments -join ' ')"
+  }
+}
+
 function Assert-Sha256 {
   param([string]$Path, [string]$Expected)
   $Actual = (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLowerInvariant()
@@ -42,24 +57,25 @@ if (-not (Test-Path $UvBin)) {
   throw "Il bootstrap ufficiale di uv non ha prodotto uv.exe"
 }
 $env:UV_PYTHON_INSTALL_DIR = Join-Path $DataDir "python"
-& $UvBin python install 3.12 --install-dir $env:UV_PYTHON_INSTALL_DIR
+Invoke-Native -Exe $UvBin -Arguments @("python", "install", "3.12", "--install-dir", $env:UV_PYTHON_INSTALL_DIR)
 $RuntimePython = Join-Path $DataDir ".venv\Scripts\python.exe"
 if (-not (Test-Path $RuntimePython)) {
-  & $UvBin venv --python 3.12 (Join-Path $DataDir ".venv")
+  Invoke-Native -Exe $UvBin -Arguments @("venv", "--python", "3.12", (Join-Path $DataDir ".venv"))
 }
 Write-Output "[2/6] Conversione, OCR e trascrizione"
-& $UvBin pip install --python $RuntimePython --require-hashes -r (Join-Path $SourceDir "requirements-runtime-windows.lock")
+Invoke-Native -Exe $UvBin -Arguments @("pip", "install", "--python", $RuntimePython, "--require-hashes", "-r", (Join-Path $SourceDir "requirements-runtime-windows.lock"))
 
 Write-Output "[3/6] Traduzione PDF con layout"
 $TranslationDir = Join-Path $DataDir "tools\pdf2zh-next"
 $TranslationPython = Join-Path $TranslationDir ".venv\Scripts\python.exe"
 if (-not (Test-Path $TranslationPython)) {
-  & $UvBin venv --python $RuntimePython (Join-Path $TranslationDir ".venv")
+  Invoke-Native -Exe $UvBin -Arguments @("venv", "--python", $RuntimePython, (Join-Path $TranslationDir ".venv"))
 }
-& $UvBin pip install --python $TranslationPython --require-hashes -r (Join-Path $SourceDir "requirements-translation-windows.lock")
-& $UvBin pip uninstall --python $TranslationPython gradio gradio-client gradio-i18n gradio-pdf
-& $UvBin pip install --python $TranslationPython --require-hashes -r (Join-Path $SourceDir "requirements-translation-overrides.lock")
-& $TranslationPython -c "from babeldoc.assets.assets import warmup; from pdf2zh_next.high_level import do_translate_async_stream; warmup()"
+Invoke-Native -Exe $UvBin -Arguments @("pip", "install", "--python", $TranslationPython, "--require-hashes", "-r", (Join-Path $SourceDir "requirements-translation-windows.lock"))
+# Absent packages are not an error here: the overrides may already be applied.
+Invoke-Native -Exe $UvBin -Arguments @("pip", "uninstall", "--python", $TranslationPython, "gradio", "gradio-client", "gradio-i18n", "gradio-pdf") -AllowedExitCodes @(0, 1)
+Invoke-Native -Exe $UvBin -Arguments @("pip", "install", "--python", $TranslationPython, "--require-hashes", "-r", (Join-Path $SourceDir "requirements-translation-overrides.lock"))
+Invoke-Native -Exe $TranslationPython -Arguments @("-c", "from babeldoc.assets.assets import warmup; from pdf2zh_next.high_level import do_translate_async_stream; warmup()")
 
 Write-Output "[4/6] Privacy Filter locale"
 $PrivacySource = Join-Path $DataDir "tools\openai-privacy-filter"
@@ -73,7 +89,7 @@ if (-not (Test-Path (Join-Path $PrivacySource "pyproject.toml"))) {
   $Extracted = Get-ChildItem -Directory $Staging | Select-Object -First 1
   Copy-Item -Recurse -Force $Extracted.FullName $PrivacySource
 }
-& $UvBin pip install --python $RuntimePython --no-deps $PrivacySource
+Invoke-Native -Exe $UvBin -Arguments @("pip", "install", "--python", $RuntimePython, "--no-deps", $PrivacySource)
 
 Write-Output "[5/6] Ollama e modelli di traduzione/OCR"
 $OllamaDir = Join-Path $DataDir "tools\ollama"
@@ -102,15 +118,15 @@ if (-not $OllamaWasRunning) {
     } catch {}
   }
 }
-& $OllamaBin pull glm-ocr
-& $OllamaBin pull translategemma:12b
+Invoke-Native -Exe $OllamaBin -Arguments @("pull", "glm-ocr")
+Invoke-Native -Exe $OllamaBin -Arguments @("pull", "translategemma:12b")
 
 Write-Output "[6/6] Modelli documentali e audio"
 Push-Location $DataDir
 try {
-  & $RuntimePython -c 'from faster_whisper import WhisperModel; WhisperModel("small", device="cpu", compute_type="int8", download_root="models/faster-whisper")'
+  Invoke-Native -Exe $RuntimePython -Arguments @("-c", 'from faster_whisper import WhisperModel; WhisperModel("small", device="cpu", compute_type="int8", download_root="models/faster-whisper")')
   $DoclingTools = Join-Path $DataDir ".venv\Scripts\docling-tools.exe"
-  & $DoclingTools models download --output-dir (Join-Path $DataDir "models\docling")
+  Invoke-Native -Exe $DoclingTools -Arguments @("models", "download", "--output-dir", (Join-Path $DataDir "models\docling"))
 } finally {
   Pop-Location
   if ((-not $OllamaWasRunning) -and ($null -ne $OllamaProcess)) {
@@ -118,5 +134,11 @@ try {
   }
 }
 
+Write-Output "Verifica finale del runtime"
+Invoke-Native -Exe $RuntimePython -Arguments @("-c", "import uvicorn, markitdown, faster_whisper, paddleocr")
+Invoke-Native -Exe $TranslationPython -Arguments @("-c", "import pdf2zh_next")
+
+# `.ready` is the flag the app trusts to skip installation, so it is written
+# only after every component has been proven importable.
 "runtime=1`ninstalled_at=$([DateTime]::UtcNow.ToString('o'))" | Set-Content -Encoding UTF8 $ReadyFile
 Write-Output "Installazione completata"

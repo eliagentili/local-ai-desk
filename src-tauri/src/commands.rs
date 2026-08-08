@@ -1,6 +1,6 @@
 use std::{
     collections::HashSet,
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::{BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -24,7 +24,29 @@ use crate::{
         AppSnapshot, BridgeStatus, EngineStatus, ExportReport, ImportReport, Job, JobSpec,
         QuickFilesReport, RuntimeStatus, StartJobsReport, SystemSnapshot, WorkflowOptions,
     },
+    process,
 };
+
+/// Engine logs are appended, never truncated: a crash loop must leave the
+/// traceback that caused it readable instead of overwriting it on every retry.
+fn append_log(path: &Path) -> Result<File, String> {
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| format!("Log non scrivibile ({}): {error}", path.display()))
+}
+
+/// Keep a log from growing without bound across months of use.
+fn rotate_log_if_large(path: &Path) {
+    const MAX_LOG_BYTES: u64 = 4 * 1024 * 1024;
+    let Ok(metadata) = fs::metadata(path) else {
+        return;
+    };
+    if metadata.len() > MAX_LOG_BYTES {
+        let _ = fs::rename(path, path.with_extension("log.1"));
+    }
+}
 
 fn hash_file(path: &Path) -> Result<String, String> {
     let file = File::open(path).map_err(|error| format!("lettura non riuscita: {error}"))?;
@@ -142,7 +164,7 @@ fn install_process_is_running(state: &AppState) -> bool {
                     .lines()
                     .rev()
                     .find(|line| !line.trim().is_empty())
-                    .unwrap_or("Consulta il log di installazione")
+                    .unwrap_or("Apri il log di installazione da Modelli")
                     .trim();
                 Some(format!("Installazione interrotta ({status}): {detail}"))
             }
@@ -153,6 +175,7 @@ fn install_process_is_running(state: &AppState) -> bool {
         }
     };
     if let Some(result) = result {
+        process::forget(&state.engine_data_dir, "install");
         if let Ok(mut last_result) = state.last_install_result.lock() {
             *last_result = Some(result);
         }
@@ -195,25 +218,22 @@ fn spawn_ollama_process(state: &AppState) -> Result<(), String> {
     }
     let models = state.engine_data_dir.join("models").join("ollama");
     fs::create_dir_all(&models).map_err(|error| error.to_string())?;
-    let stdout = File::create(state.engine_data_dir.join("ollama.log"))
-        .map_err(|error| error.to_string())?;
+    let stdout = append_log(&state.engine_data_dir.join("ollama.log"))?;
     let stderr = stdout.try_clone().map_err(|error| error.to_string())?;
     let mut command = Command::new(executable);
     command
         .arg("serve")
         .env("OLLAMA_MODELS", models)
+        // Never inherit an OLLAMA_HOST that would publish local models on the
+        // network: the app only ever talks to the loopback interface.
+        .env("OLLAMA_HOST", "127.0.0.1:11434")
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        command.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
-    }
+    process::isolate_process_group(&mut command);
     let child = command
         .spawn()
         .map_err(|error| format!("Avvio di Ollama non riuscito: {error}"))?;
+    process::remember(&state.engine_data_dir, "ollama", child.id());
     *state
         .ollama_process
         .lock()
@@ -227,7 +247,10 @@ fn spawn_runtime_process(state: &AppState) -> Result<(), String> {
     }
     let python = runtime_python(&state.engine_data_dir);
     if !python.is_file() {
-        return Err("Installa prima il runtime locale dalla schermata Motori".to_string());
+        return Err(
+            "Il runtime locale non è ancora installato. Apri Modelli e avvia l'installazione."
+                .to_string(),
+        );
     }
     spawn_ollama_process(state)?;
     let backend = state
@@ -240,12 +263,13 @@ fn spawn_runtime_process(state: &AppState) -> Result<(), String> {
     }
     fs::create_dir_all(&state.engine_data_dir).map_err(|error| error.to_string())?;
     let log_path = state.engine_data_dir.join("runtime.log");
-    let stdout = File::create(&log_path).map_err(|error| error.to_string())?;
+    let stdout = append_log(&log_path)?;
     let stderr = stdout.try_clone().map_err(|error| error.to_string())?;
     let mut command = Command::new(python);
     command
         .current_dir(&state.engine_resource_dir)
         .env("LOCAL_AI_ENGINE_HOME", &state.engine_data_dir)
+        .env("LOCAL_AI_ENGINE_TOKEN", engine_bridge::engine_token())
         .env("PYTHONUTF8", "1")
         .arg("-m")
         .arg("uvicorn")
@@ -256,16 +280,11 @@ fn spawn_runtime_process(state: &AppState) -> Result<(), String> {
         .arg("8787")
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        command.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
-    }
+    process::isolate_process_group(&mut command);
     let child = command
         .spawn()
         .map_err(|error| format!("Avvio del runtime non riuscito: {error}"))?;
+    process::remember(&state.engine_data_dir, "runtime", child.id());
     *state
         .runtime_process
         .lock()
@@ -273,20 +292,43 @@ fn spawn_runtime_process(state: &AppState) -> Result<(), String> {
     Ok(())
 }
 
+/// Terminate every engine process this app is responsible for. Ollama goes last
+/// so the runtime can still reach it while it shuts its own workers down.
+pub(crate) fn stop_engine_processes(state: &AppState) {
+    process::stop_process_tree(&state.runtime_process);
+    process::forget(&state.engine_data_dir, "runtime");
+    process::stop_process_tree(&state.ollama_process);
+    process::forget(&state.engine_data_dir, "ollama");
+    process::stop_process_tree(&state.installer_process);
+    process::forget(&state.engine_data_dir, "install");
+}
+
 pub(crate) fn try_start_installed_runtime(state: &AppState) {
+    // A pid file that survived the previous run means the app was force-quit or
+    // crashed: clean up whatever it left running before starting a new runtime.
+    for name in ["runtime", "ollama", "install"] {
+        process::reap_orphan(&state.engine_data_dir, name);
+    }
     let _ = spawn_runtime_process(state);
 }
 
+/// The engine port answers but the listener is not a runtime we started and it
+/// does not accept our token: something else owns 8787.
+fn foreign_engine_listener(state: &AppState, bridge_available: bool) -> bool {
+    loopback_runtime_available() && !bridge_available && !process_is_running(&state.runtime_process)
+}
+
+/// Read-only: polled every few seconds by the UI, so it must never spawn or
+/// restart anything. Starting the runtime is `try_start_installed_runtime` at
+/// launch and `start_engine_runtime` on explicit request.
 #[tauri::command]
 pub async fn get_runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatus, String> {
-    let mut running = bridge_status().await.available || process_is_running(&state.runtime_process);
+    let bridge_available = bridge_status().await.available;
+    let running = bridge_available || process_is_running(&state.runtime_process);
     let installing = install_process_is_running(state.inner());
     let installed = runtime_python(&state.engine_data_dir).is_file()
         && state.engine_data_dir.join(".ready").is_file();
-    if installed && !installing && !running {
-        let _ = spawn_runtime_process(state.inner());
-        running = process_is_running(&state.runtime_process);
-    }
+    let occupied = foreign_engine_listener(state.inner(), bridge_available);
     let supported = cfg!(any(target_os = "macos", target_os = "windows"));
     let last_install_result = state
         .last_install_result
@@ -309,10 +351,18 @@ pub async fn get_runtime_status(state: State<'_, AppState>) -> Result<RuntimeSta
             .join("install.log")
             .to_string_lossy()
             .into_owned(),
+        runtime_log_path: state
+            .engine_data_dir
+            .join("runtime.log")
+            .to_string_lossy()
+            .into_owned(),
         message: if running {
             "Motori locali attivi".to_string()
         } else if installing {
             "Installazione dei componenti in corso".to_string()
+        } else if occupied {
+            "La porta 8787 è occupata da un altro programma. Chiudilo e riavvia i motori."
+                .to_string()
         } else if installed {
             "Runtime installato, pronto per essere avviato".to_string()
         } else if let Some(result) = last_install_result {
@@ -325,10 +375,74 @@ pub async fn get_runtime_status(state: State<'_, AppState>) -> Result<RuntimeSta
     })
 }
 
+/// Last lines of a log, for error messages that tell the user what went wrong
+/// instead of only that something did.
+fn log_tail(path: &Path, lines: usize) -> Option<String> {
+    let raw = fs::read(path).ok()?;
+    let start = raw.len().saturating_sub(4_000);
+    let tail = String::from_utf8_lossy(&raw[start..]);
+    let collected: Vec<&str> = tail
+        .lines()
+        .rev()
+        .filter(|line| !line.trim().is_empty())
+        .take(lines)
+        .collect();
+    if collected.is_empty() {
+        return None;
+    }
+    Some(
+        collected
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join(" · ")
+            .trim()
+            .to_string(),
+    )
+}
+
 #[tauri::command]
 pub async fn start_engine_runtime(state: State<'_, AppState>) -> Result<RuntimeStatus, String> {
     spawn_runtime_process(state.inner())?;
-    tokio::time::sleep(Duration::from_millis(700)).await;
+
+    // Wait for the engine to actually answer instead of assuming it will: the
+    // user is told the truth, and a runtime that dies on startup surfaces the
+    // reason from its own log.
+    for _ in 0..24 {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        if bridge_status().await.available {
+            return get_runtime_status(state).await;
+        }
+        if !process_is_running(&state.runtime_process) {
+            let detail = log_tail(&state.engine_data_dir.join("runtime.log"), 3)
+                .unwrap_or_else(|| "nessun dettaglio nel log".to_string());
+            return Err(format!(
+                "I motori si sono chiusi subito dopo l'avvio: {detail}"
+            ));
+        }
+    }
+    Err(
+        "I motori non hanno risposto entro 12 secondi. Controlla runtime.log da Modelli."
+            .to_string(),
+    )
+}
+
+/// Give the user a way out: stop the local engines without quitting the app.
+#[tauri::command]
+pub async fn stop_engine_runtime(state: State<'_, AppState>) -> Result<RuntimeStatus, String> {
+    let has_active = {
+        let Ok(cancellations) = state.cancellations.lock() else {
+            return Err("Stato dei lavori non disponibile".to_string());
+        };
+        !cancellations.is_empty()
+    };
+    if has_active {
+        return Err(
+            "Ci sono lavori attivi. Annullali o attendi che finiscano prima di fermare i motori."
+                .to_string(),
+        );
+    }
+    stop_engine_processes(state.inner());
     get_runtime_status(state).await
 }
 
@@ -341,11 +455,20 @@ pub async fn install_engine_runtime(state: State<'_, AppState>) -> Result<Runtim
         return Err("L’installazione guidata supporta macOS e Windows".to_string());
     }
     fs::create_dir_all(&state.engine_data_dir).map_err(|error| error.to_string())?;
+    // An installer started by a previous run may still be writing into the same
+    // virtualenv. Running a second bootstrap on top of it corrupts both.
+    if process::reap_orphan(&state.engine_data_dir, "install") {
+        return Err(
+            "Un'installazione precedente era ancora in corso: è stata interrotta. Riprova."
+                .to_string(),
+        );
+    }
     if let Ok(mut last_result) = state.last_install_result.lock() {
         *last_result = None;
     }
     let log_path = state.engine_data_dir.join("install.log");
-    let stdout = File::create(&log_path).map_err(|error| error.to_string())?;
+    rotate_log_if_large(&log_path);
+    let stdout = append_log(&log_path)?;
     let stderr = stdout.try_clone().map_err(|error| error.to_string())?;
     let script = if cfg!(windows) {
         state
@@ -389,15 +512,11 @@ pub async fn install_engine_runtime(state: State<'_, AppState>) -> Result<Runtim
     command
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
+    process::isolate_process_group(&mut command);
     let child = command
         .spawn()
         .map_err(|error| format!("Installazione non avviata: {error}"))?;
+    process::remember(&state.engine_data_dir, "install", child.id());
     *state
         .installer_process
         .lock()
@@ -416,15 +535,17 @@ pub(crate) async fn bridge_status() -> BridgeStatus {
         engines: Vec::new(),
     };
 
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_millis(900))
-        .build()
-    {
+    let client = match engine_bridge::engine_client(Duration::from_millis(900)) {
         Ok(client) => client,
         Err(_) => return fallback,
     };
 
-    let response = match client.get("http://127.0.0.1:8787/api/status").send().await {
+    let response = match client
+        .get("http://127.0.0.1:8787/api/status")
+        .timeout(Duration::from_millis(900))
+        .send()
+        .await
+    {
         Ok(response) if response.status().is_success() => response,
         _ => return fallback,
     };
@@ -494,7 +615,7 @@ async fn snapshot(database_path: PathBuf, data_dir: PathBuf) -> Result<AppSnapsh
     let database_for_query = database_path.clone();
     let records = tauri::async_runtime::spawn_blocking(move || {
         let library = database::list_library(&database_for_query)?;
-        let jobs = database::list_jobs(&database_for_query)?;
+        let jobs = database::list_jobs(&database_for_query, JOB_HISTORY_LIMIT)?;
         Ok::<_, rusqlite::Error>((library, jobs))
     })
     .await
@@ -669,13 +790,20 @@ pub async fn get_bridge_status() -> BridgeStatus {
     bridge_status().await
 }
 
+/// How much history the activity view keeps in memory. The list is polled
+/// while jobs run, so an unbounded query would make every tick more expensive
+/// as the archive grows.
+const JOB_HISTORY_LIMIT: i64 = 200;
+
 #[tauri::command]
 pub async fn list_jobs(state: State<'_, AppState>) -> Result<Vec<Job>, String> {
     let database_path = state.database_path.clone();
-    tauri::async_runtime::spawn_blocking(move || database::list_jobs(&database_path))
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        database::list_jobs(&database_path, JOB_HISTORY_LIMIT)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -808,15 +936,22 @@ pub async fn start_jobs(
     if item_ids.len().saturating_add(quick_paths.len()) > 500 {
         return Err("Avvia al massimo 500 file per batch".to_string());
     }
-    if !bridge_status().await.available {
+    let mut bridge = bridge_status().await;
+    if !bridge.available {
         let _ = spawn_runtime_process(state.inner());
         tokio::time::sleep(Duration::from_millis(700)).await;
+        bridge = bridge_status().await;
     }
-    if !bridge_status().await.available {
+    if !bridge.available {
         return Err(
-            "I motori locali non sono attivi. Apri Motori per installarli o riavviarli."
+            "I motori locali non sono attivi. Apri Modelli per installarli o riavviarli."
                 .to_string(),
         );
+    }
+    // Refuse before materialising jobs that are certain to fail: a 200-file
+    // batch of guaranteed errors is worse than one clear message.
+    if let Some(reason) = engine_not_ready(&bridge, &options.intent) {
+        return Err(reason);
     }
 
     let database_path = state.database_path.clone();
@@ -888,6 +1023,124 @@ pub async fn start_jobs(
     })
 }
 
+/// Which engine has to be ready before an intent can produce a real result.
+fn required_engine(intent: &str) -> Option<&'static str> {
+    match intent {
+        "translate" => Some("pdf-translate"),
+        "ocr" => Some("paddleocr"),
+        "transcribe" => Some("faster-whisper"),
+        // `extract` routes across several engines at run time and `privacy`
+        // degrades to the local rules on purpose, so neither can be pre-checked.
+        _ => None,
+    }
+}
+
+fn engine_not_ready(bridge: &BridgeStatus, intent: &str) -> Option<String> {
+    let engine_id = required_engine(intent)?;
+    let engine = bridge
+        .engines
+        .iter()
+        .find(|engine| engine.id == engine_id)?;
+    if engine.state == "ready" {
+        return None;
+    }
+    Some(format!(
+        "Il motore richiesto non è pronto ({}). Apri Modelli e completa l'installazione prima di avviare il batch.",
+        engine.label
+    ))
+}
+
+/// Put a finished-but-unsuccessful job back in the queue with its original
+/// settings, so a transient failure does not cost the user the whole setup.
+#[tauri::command]
+pub async fn retry_job(job_id: String, state: State<'_, AppState>) -> Result<AppSnapshot, String> {
+    let database_path = state.database_path.clone();
+    let lookup_id = job_id.clone();
+    let job = tauri::async_runtime::spawn_blocking(move || {
+        database::jobs_by_ids(&database_path, &[lookup_id])
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?
+    .into_iter()
+    .next()
+    .ok_or_else(|| "Lavoro non trovato".to_string())?;
+
+    let Some(library_item_id) = job.library_item_id.clone() else {
+        // Quick-drop sources are deliberately never recorded, so there is no
+        // path to re-read. Say that plainly instead of failing obscurely.
+        return Err(
+            "Questo lavoro usava un file temporaneo, che non è stato archiviato. Trascina di nuovo il file per rielaborarlo."
+                .to_string(),
+        );
+    };
+
+    let database_path = state.database_path.clone();
+    let item_id = library_item_id.clone();
+    let item = tauri::async_runtime::spawn_blocking(move || {
+        database::library_items_by_ids(&database_path, &[item_id])
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|_| "La fonte non è più nella Libreria: reimportala per riprovare.".to_string())?
+    .into_iter()
+    .next()
+    .ok_or_else(|| "La fonte non è più nella Libreria: reimportala per riprovare.".to_string())?;
+
+    if !Path::new(&item.path).is_file() {
+        return Err(format!(
+            "Il file originale non è più al suo posto: {}",
+            item.path
+        ));
+    }
+
+    if !bridge_status().await.available {
+        return Err(
+            "I motori locali non sono attivi. Apri Modelli per avviarli, poi riprova.".to_string(),
+        );
+    }
+
+    let database_path = state.database_path.clone();
+    let requeue_id = job_id.clone();
+    let requeued = tauri::async_runtime::spawn_blocking(move || {
+        database::requeue_job(&database_path, &requeue_id)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
+    if !requeued {
+        return Err(
+            "Si può riprovare solo un lavoro non riuscito, annullato o interrotto".to_string(),
+        );
+    }
+
+    let options = WorkflowOptions {
+        intent: job.workflow.clone(),
+        output_format: job.output_format.clone(),
+        language: job.language.clone(),
+        source_language: job.source_language.clone(),
+        target_language: job.target_language.clone(),
+        translation_mode: job.translation_mode.clone(),
+    };
+    let spec = JobSpec {
+        id: job.id.clone(),
+        batch_id: job.batch_id.clone().unwrap_or_else(|| job.id.clone()),
+        library_item_id: Some(library_item_id),
+        item,
+        options,
+        tool: job.tool.clone(),
+    };
+    let cancellation = Arc::new(AtomicBool::new(false));
+    state
+        .cancellations
+        .lock()
+        .map_err(|_| "Stato di cancellazione non disponibile".to_string())?
+        .insert(spec.id.clone(), Arc::clone(&cancellation));
+    engine_bridge::spawn_job(state.inner().clone(), spec, cancellation);
+
+    snapshot(state.database_path.clone(), state.data_dir.clone()).await
+}
+
 #[tauri::command]
 pub async fn cancel_job(job_id: String, state: State<'_, AppState>) -> Result<bool, String> {
     let flag = state
@@ -902,7 +1155,9 @@ pub async fn cancel_job(job_id: String, state: State<'_, AppState>) -> Result<bo
     flag.store(true, Ordering::Release);
     let database_path = state.database_path.clone();
     let job_for_update = job_id.clone();
-    let _ = tauri::async_runtime::spawn_blocking(move || {
+    // A job that finished microseconds ago is not cancellable any more: say so
+    // rather than reporting a cancellation that never happened.
+    let changed = tauri::async_runtime::spawn_blocking(move || {
         database::update_job_progress(
             &database_path,
             &job_for_update,
@@ -918,9 +1173,11 @@ pub async fn cancel_job(job_id: String, state: State<'_, AppState>) -> Result<bo
             },
         )
     })
-    .await;
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
     engine_bridge::request_remote_cancel(&job_id).await;
-    Ok(true)
+    Ok(changed > 0)
 }
 
 #[tauri::command]
@@ -941,18 +1198,10 @@ pub async fn cancel_all_jobs(state: State<'_, AppState>) -> Result<usize, String
     Ok(active.len())
 }
 
+/// Entries inside the export archive share the sanitiser used for results, so
+/// a name can never carry a separator into the ZIP and escape `risultati/`.
 fn safe_archive_name(name: &str) -> String {
-    let basename = Path::new(name)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("risultato.txt");
-    basename
-        .chars()
-        .map(|character| match character {
-            '/' | '\\' | ':' | '\0' => '-',
-            other => other,
-        })
-        .collect()
+    engine_bridge::safe_filename(name, "risultato.txt")
 }
 
 fn create_results_zip(
@@ -1127,10 +1376,132 @@ pub async fn reveal_job_result(job_id: String, state: State<'_, AppState>) -> Re
     reveal(&canonical_output)
 }
 
+/// Show a diagnostics file in the system file manager. Confined to the app data
+/// directory so the UI can never turn this into a general "open anything" call.
+#[tauri::command]
+pub async fn reveal_path(path: String, state: State<'_, AppState>) -> Result<(), String> {
+    let canonical_data = state
+        .data_dir
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let target = PathBuf::from(&path).canonicalize().map_err(|_| {
+        "Il file non esiste ancora: comparirà al primo avvio dei motori.".to_string()
+    })?;
+    if !target.starts_with(&canonical_data) || !target.is_file() {
+        return Err("Percorso non consentito".to_string());
+    }
+    reveal(&target)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::models::{LibraryItem, WorkflowOptions};
+
+    fn options(intent: &str, output_format: &str) -> WorkflowOptions {
+        WorkflowOptions {
+            intent: intent.to_string(),
+            output_format: output_format.to_string(),
+            ..WorkflowOptions::default()
+        }
+    }
+
+    fn item_named(name: &str) -> LibraryItem {
+        LibraryItem {
+            id: "item".to_string(),
+            name: name.to_string(),
+            path: format!("/tmp/{name}"),
+            kind: "File".to_string(),
+            size_bytes: 1,
+            content_hash: "hash".to_string(),
+            status: "ready".to_string(),
+            added_at: "2026-08-06T12:00:00Z".to_string(),
+            updated_at: "2026-08-06T12:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn workflow_validation_rejects_mismatched_inputs_and_formats() {
+        // Transcription of a PDF, OCR of a spreadsheet and translation into the
+        // same language are all user-reachable through a stale selection.
+        assert!(
+            validate_workflow(&[item_named("nota.pdf")], &options("transcribe", "txt")).is_err()
+        );
+        assert!(validate_workflow(&[item_named("conti.xlsx")], &options("ocr", "txt")).is_err());
+        assert!(validate_workflow(&[item_named("nota.pdf")], &options("extract", "srt")).is_err());
+        assert!(
+            validate_workflow(&[item_named("clip.mp4")], &options("transcribe", "srt")).is_ok()
+        );
+
+        let mut same_language = options("translate", "pdf");
+        same_language.source_language = "it".to_string();
+        same_language.target_language = "it".to_string();
+        assert!(validate_workflow(&[item_named("doc.pdf")], &same_language).is_err());
+
+        let mut auto_source = options("translate", "pdf");
+        auto_source.source_language = "auto".to_string();
+        assert!(validate_workflow(&[item_named("doc.pdf")], &auto_source).is_err());
+
+        let mut injected = options("extract", "markdown");
+        injected.language = "it; DROP TABLE jobs".to_string();
+        assert!(validate_workflow(&[item_named("nota.pdf")], &injected).is_err());
+
+        // A batch is only as valid as its least compatible member.
+        assert!(validate_workflow(
+            &[item_named("clip.mp4"), item_named("nota.pdf")],
+            &options("transcribe", "txt"),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn every_intent_resolves_to_a_tool_and_unknown_ones_do_not() {
+        for intent in ["extract", "translate", "ocr", "transcribe", "privacy"] {
+            assert!(resolve_tool(intent).is_ok(), "{intent} must map to a tool");
+        }
+        assert!(resolve_tool("").is_err());
+        assert!(resolve_tool("delete-everything").is_err());
+    }
+
+    #[test]
+    fn archive_names_stay_flat_and_keep_non_ascii_titles() {
+        // Path separators must not survive into the archive: a traversal here
+        // would let a result escape the `risultati/` folder on extraction.
+        assert_eq!(safe_archive_name("../../etc/passwd"), "passwd");
+        assert_eq!(safe_archive_name("cartella/risultato.md"), "risultato.md");
+        assert_eq!(safe_archive_name("C:\\Windows\\note.txt"), "note.txt");
+        // Accents and emoji are ordinary filenames, not something to strip.
+        assert_eq!(
+            safe_archive_name("relazione annuale è.md"),
+            "relazione annuale è.md"
+        );
+        assert_eq!(safe_archive_name("鍵 🔑.txt"), "鍵 🔑.txt");
+        assert_eq!(safe_archive_name(""), "risultato.txt");
+    }
+
+    #[test]
+    fn engine_readiness_blocks_only_the_intents_that_need_one_engine() {
+        let bridge = |state: &str| BridgeStatus {
+            available: true,
+            local_only: true,
+            ready_engines: 0,
+            total_engines: 1,
+            batch_parallelism: 3,
+            label: String::new(),
+            engines: vec![EngineStatus {
+                id: "faster-whisper".to_string(),
+                state: state.to_string(),
+                label: "Da installare".to_string(),
+                version: None,
+            }],
+        };
+        assert!(engine_not_ready(&bridge("missing"), "transcribe").is_some());
+        assert!(engine_not_ready(&bridge("ready"), "transcribe").is_none());
+        // Auto routes at run time and Privacy Shield degrades on purpose, so
+        // neither may be blocked before the job starts.
+        assert!(engine_not_ready(&bridge("missing"), "extract").is_none());
+        assert!(engine_not_ready(&bridge("missing"), "privacy").is_none());
+    }
 
     #[test]
     fn quick_files_are_inspected_without_hashing_or_persisting() {
@@ -1212,6 +1583,7 @@ mod tests {
                     output_mime: "text/markdown",
                     engine: "test",
                     elapsed_seconds: 0.1,
+                    warnings: &[],
                 },
             )
             .expect("complete");

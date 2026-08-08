@@ -37,5 +37,8 @@ tokio-util = { version = "0.7.19", features = ["io"] }
 uuid = { version = "1", features = ["v4"] }
 zip = { version = "8.6.0", default-features = false }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"

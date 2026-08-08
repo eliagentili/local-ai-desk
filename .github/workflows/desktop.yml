@@ -96,6 +96,8 @@ jobs:
           shared-key: ${{ matrix.label }}
       - name: Install frontend dependencies
         run: npm ci
+      - name: Type-check frontend
+        run: npm run check
       - name: Validate frontend
         run: npm run build
       - name: Test signed release manifest
@@ -166,6 +168,22 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+      # A tag that disagrees with the compiled version makes every client see an
+      # update that installs the same build, forever. Fail before publishing.
+      - name: Verify version coherence with the tag
+        run: |
+          node -e '
+            const fs = require("fs");
+            const tag = process.env.GITHUB_REF_NAME.replace(/^v/, "");
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
+            const conf = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8")).version;
+            const cargo = fs.readFileSync("src-tauri/Cargo.toml", "utf8").match(/^version = "(.+)"/m)[1];
+            if (new Set([tag, pkg, conf, cargo]).size !== 1) {
+              console.error("version mismatch", { tag, pkg, conf, cargo });
+              process.exit(1);
+            }
+            console.log("versions agree:", tag);
+          '
       - name: Download installers
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -182,6 +200,17 @@ jobs:
           RELEASE_NOTES_FILE: .github/release-notes/${{ github.ref_name }}.md
           RELEASE_TAG: ${{ github.ref_name }}
         run: node scripts/prepare-release-assets.mjs downloaded release-assets
+      # A rotated signing secret would otherwise ship a release that no client
+      # can install, because the app only trusts the public key compiled into it.
+      - name: Verify updater signatures against the shipped public key
+        run: |
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y minisign
+          node -e 'process.stdout.write(Buffer.from(JSON.parse(require("fs").readFileSync("src-tauri/tauri.conf.json","utf8")).plugins.updater.pubkey,"base64").toString())' > updater.pub
+          for asset in Local-AI-Desk-macOS-Apple-Silicon.app.tar.gz Local-AI-Desk-Windows-x64-Setup.exe; do
+            base64 -d "release-assets/$asset.sig" > "$asset.minisig"
+            minisign -V -p updater.pub -x "$asset.minisig" -m "release-assets/$asset"
+          done
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}

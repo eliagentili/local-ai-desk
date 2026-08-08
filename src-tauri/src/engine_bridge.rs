@@ -24,6 +24,35 @@ use crate::{
 };
 
 const LEGACY_BASE: &str = "http://127.0.0.1:8787";
+const TOKEN_HEADER: &str = "x-local-token";
+
+/// Shared secret handed to the engine runtime at spawn time. Without it the
+/// backend refuses every request, so a stray process squatting on port 8787 can
+/// neither receive the user's documents nor be mistaken for our own runtime.
+static ENGINE_TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+pub(crate) fn engine_token() -> &'static str {
+    ENGINE_TOKEN.get_or_init(|| {
+        let mut token = String::with_capacity(64);
+        for _ in 0..4 {
+            token.push_str(&uuid::Uuid::new_v4().simple().to_string());
+        }
+        token
+    })
+}
+
+/// A client that always identifies itself to the local engine.
+pub(crate) fn engine_client(connect_timeout: Duration) -> Result<Client, reqwest::Error> {
+    let mut headers = header::HeaderMap::new();
+    let mut value = header::HeaderValue::from_str(engine_token())
+        .unwrap_or(header::HeaderValue::from_static(""));
+    value.set_sensitive(true);
+    headers.insert(TOKEN_HEADER, value);
+    Client::builder()
+        .default_headers(headers)
+        .connect_timeout(connect_timeout)
+        .build()
+}
 
 #[derive(Debug)]
 enum RunError {
@@ -77,6 +106,9 @@ struct LegacyTextResult {
     filename: String,
     engine: String,
     elapsed_seconds: f64,
+    /// Quality caveats the engine attached to an otherwise successful run.
+    #[serde(default)]
+    warnings: Vec<String>,
 }
 
 fn is_cancelled(flag: &AtomicBool) -> bool {
@@ -106,6 +138,7 @@ async fn persist_progress(
     })
     .await
     .map_err(|error| RunError::Message(error.to_string()))?
+    .map(|_| ())
     .map_err(|error| RunError::Message(error.to_string()))
 }
 
@@ -161,24 +194,46 @@ fn output_mime(format: &str) -> &str {
     }
 }
 
-fn safe_filename(name: &str, fallback: &str) -> String {
-    let basename = Path::new(name)
-        .file_name()
-        .and_then(|value| value.to_str())
+/// Names reserved by Windows: a file called `CON.txt` cannot be created there,
+/// so a result carrying that name would fail to extract from an exported ZIP
+/// even though it was produced on macOS.
+const WINDOWS_RESERVED: [&str; 22] = [
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
+/// Reduce an engine-supplied name to a single, writable filename.
+///
+/// Both separators are stripped regardless of host platform, because a name can
+/// be produced on one OS and extracted on the other: `Path::file_name` alone
+/// would leave `C:\dir\file` intact on Unix.
+pub(crate) fn safe_filename(name: &str, fallback: &str) -> String {
+    let basename = name
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|value| !value.is_empty())
         .unwrap_or(fallback);
     let cleaned: String = basename
         .chars()
         .map(|character| match character {
-            '/' | '\\' | ':' | '\0' => '-',
+            // Control characters would render as garbage and break some shells.
+            ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
+            other if (other as u32) < 0x20 => '-',
             other => other,
         })
         .collect();
     let trimmed = cleaned.trim_matches([' ', '.']);
     if trimmed.is_empty() {
-        fallback.to_string()
-    } else {
-        trimmed.to_string()
+        return fallback.to_string();
     }
+    let stem = trimmed.split('.').next().unwrap_or(trimmed);
+    if WINDOWS_RESERVED
+        .iter()
+        .any(|reserved| stem.eq_ignore_ascii_case(reserved))
+    {
+        return format!("_{trimmed}");
+    }
+    trimmed.to_string()
 }
 
 fn translation_fallback_name(spec: &JobSpec) -> String {
@@ -304,12 +359,21 @@ async fn poll_translation_progress(
     ))
 }
 
+struct WrittenResult {
+    path: PathBuf,
+    name: String,
+    mime: String,
+    engine: String,
+    elapsed_seconds: f64,
+    warnings: Vec<String>,
+}
+
 async fn write_translation_result(
     response: Response,
     state: &AppState,
     spec: &JobSpec,
     cancel: &AtomicBool,
-) -> Result<(PathBuf, String, String, String, f64), RunError> {
+) -> Result<WrittenResult, RunError> {
     let fallback = translation_fallback_name(spec);
     let output_name = response_filename(&response, &fallback);
     let mime = response
@@ -336,25 +400,48 @@ async fn write_translation_result(
     let output_path = job_dir.join(&output_name);
     let partial_path = job_dir.join(format!(".{output_name}.partial"));
     let mut destination = File::create(&partial_path).await?;
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        if is_cancelled(cancel) {
-            let _ = fs::remove_file(&partial_path).await;
-            return Err(RunError::Cancelled);
+    let outcome: Result<(), RunError> = async {
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            if is_cancelled(cancel) {
+                return Err(RunError::Cancelled);
+            }
+            destination.write_all(&chunk?).await?;
         }
-        destination.write_all(&chunk?).await?;
+        destination.flush().await?;
+        Ok(())
     }
-    destination.flush().await?;
+    .await;
     drop(destination);
-    fs::rename(&partial_path, &output_path).await?;
-    Ok((output_path, output_name, mime, engine, elapsed))
+
+    // Cancellation, a full disk and a failed rename all converge here, so a
+    // half-written PDF is never left behind under any of them.
+    let outcome = outcome.and(
+        fs::rename(&partial_path, &output_path)
+            .await
+            .map_err(RunError::from),
+    );
+    if let Err(error) = outcome {
+        let _ = fs::remove_file(&partial_path).await;
+        let _ = fs::remove_dir(&job_dir).await;
+        return Err(error);
+    }
+    Ok(WrittenResult {
+        path: output_path,
+        name: output_name,
+        mime,
+        engine,
+        elapsed_seconds: elapsed,
+        warnings: Vec::new(),
+    })
 }
 
 async fn write_text_result(
     response: Response,
     state: &AppState,
     spec: &JobSpec,
-) -> Result<(PathBuf, String, String, String, f64), RunError> {
+    cancel: &AtomicBool,
+) -> Result<WrittenResult, RunError> {
     let status = response.status();
     let raw = response
         .text()
@@ -390,14 +477,31 @@ async fn write_text_result(
     let job_dir = state.results_dir.join(&spec.id);
     fs::create_dir_all(&job_dir).await?;
     let output_path = job_dir.join(&output_name);
-    fs::write(&output_path, payload.output.unwrap_or_default()).await?;
-    Ok((
-        output_path,
-        output_name,
-        output_mime(&payload.format).to_string(),
-        payload.engine,
-        payload.elapsed_seconds,
-    ))
+    if is_cancelled(cancel) {
+        let _ = fs::remove_dir(&job_dir).await;
+        return Err(RunError::Cancelled);
+    }
+    // Write, then rename: a reader never sees a partially written result, which
+    // is what "risultato atomico" claims for every format, not only for PDF.
+    let partial_path = job_dir.join(format!(".{output_name}.partial"));
+    let written = async {
+        fs::write(&partial_path, payload.output.unwrap_or_default()).await?;
+        fs::rename(&partial_path, &output_path).await
+    }
+    .await;
+    if let Err(error) = written {
+        let _ = fs::remove_file(&partial_path).await;
+        let _ = fs::remove_dir(&job_dir).await;
+        return Err(RunError::from(error));
+    }
+    Ok(WrittenResult {
+        path: output_path,
+        name: output_name,
+        mime: output_mime(&payload.format).to_string(),
+        engine: payload.engine,
+        elapsed_seconds: payload.elapsed_seconds,
+        warnings: payload.warnings,
+    })
 }
 
 async fn execute_inner(
@@ -405,9 +509,7 @@ async fn execute_inner(
     spec: &JobSpec,
     cancel: &Arc<AtomicBool>,
 ) -> Result<(), RunError> {
-    let client = Client::builder()
-        .connect_timeout(Duration::from_secs(2))
-        .build()?;
+    let client = engine_client(Duration::from_secs(2))?;
 
     persist_progress(
         state.database_path.clone(),
@@ -468,11 +570,35 @@ async fn execute_inner(
     let translation = spec.tool == "pdf-translate";
     let mut last_signature = String::new();
     let started = Instant::now();
+    // The engine has no request timeout on purpose: transcribing a long video
+    // or OCR-ing a large scan legitimately takes hours. What must not happen is
+    // a *dead* engine holding a scheduler permit forever, so liveness is probed
+    // instead of elapsed time.
+    let mut ticks: u32 = 0;
+    let mut missed_heartbeats: u32 = 0;
 
     let response = loop {
         tokio::select! {
             result = &mut request => break result?,
             _ = sleep(Duration::from_millis(450)) => {
+                ticks += 1;
+                if ticks.is_multiple_of(11) {
+                    let alive = client
+                        .get(format!("{LEGACY_BASE}/api/health"))
+                        .timeout(Duration::from_secs(2))
+                        .send()
+                        .await
+                        .map(|response| response.status().is_success())
+                        .unwrap_or(false);
+                    missed_heartbeats = if alive { 0 } else { missed_heartbeats + 1 };
+                    if missed_heartbeats >= 6 {
+                        return Err(RunError::Message(
+                            "I motori locali hanno smesso di rispondere. Aprili da Modelli, \
+                             riavviali e riprova il lavoro."
+                                .to_string(),
+                        ));
+                    }
+                }
                 if is_cancelled(cancel) {
                     let _ = persist_progress(
                         state.database_path.clone(), spec.id.clone(),
@@ -574,17 +700,17 @@ async fn execute_inner(
     )
     .await?;
 
-    let (output_path, output_name, mime, engine, remote_elapsed) = if translation {
+    let written = if translation {
         write_translation_result(response, state, spec, cancel).await?
     } else {
-        write_text_result(response, state, spec).await?
+        write_text_result(response, state, spec, cancel).await?
     };
-    let elapsed = if remote_elapsed > 0.0 {
-        remote_elapsed
+    let elapsed = if written.elapsed_seconds > 0.0 {
+        written.elapsed_seconds
     } else {
         started.elapsed().as_secs_f64()
     };
-    let path_string = output_path.to_string_lossy().into_owned();
+    let path_string = written.path.to_string_lossy().into_owned();
     let database_path = state.database_path.clone();
     let job_id = spec.id.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -593,10 +719,11 @@ async fn execute_inner(
             &job_id,
             &CompletedJob {
                 output_path: &path_string,
-                output_name: &output_name,
-                output_mime: &mime,
-                engine: &engine,
+                output_name: &written.name,
+                output_mime: &written.mime,
+                engine: &written.engine,
                 elapsed_seconds: elapsed,
+                warnings: &written.warnings,
             },
         )
     })
@@ -622,10 +749,7 @@ pub fn spawn_job(state: AppState, spec: JobSpec, cancel: Arc<AtomicBool>) {
 }
 
 pub async fn request_remote_cancel(job_id: &str) {
-    if let Ok(client) = Client::builder()
-        .connect_timeout(Duration::from_secs(1))
-        .build()
-    {
+    if let Ok(client) = engine_client(Duration::from_secs(1)) {
         cancel_remote(&client, job_id).await;
     }
 }
@@ -703,7 +827,7 @@ mod tests {
         let mut status = String::new();
         for _ in 0..20 {
             tokio::time::sleep(Duration::from_millis(25)).await;
-            status = database::list_jobs(&database_path)
+            status = database::list_jobs(&database_path, 200)
                 .expect("jobs")
                 .remove(0)
                 .status;
@@ -784,7 +908,9 @@ mod tests {
             .await
             .expect("real bridge execution");
 
-        let job = database::list_jobs(&database_path).expect("jobs").remove(0);
+        let job = database::list_jobs(&database_path, 200)
+            .expect("jobs")
+            .remove(0);
         assert_eq!(job.status, "completed");
         assert_eq!(job.progress, 100.0);
         assert_eq!(job.engine.as_deref(), Some("Microsoft MarkItDown"));
