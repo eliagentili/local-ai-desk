@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import signal
+import subprocess
 import tempfile
 import threading
 import time
@@ -309,6 +310,111 @@ def cancel_job(job_id: str):
     return {"job_id": job_id, "cancelled": event is not None}
 
 
+# The desktop app terminates the engines when it quits normally. A crash, a
+# Force Quit or a `kill -9` skips that, and the engines — with the models they
+# hold in memory — would then run on the user's machine indefinitely. So the
+# engine also watches the app: if the process that started it is gone, it shuts
+# itself down and takes what it owns with it.
+APP_PID = int(os.getenv("LOCAL_AI_APP_PID", "0") or 0)
+OLLAMA_PID = int(os.getenv("LOCAL_AI_OLLAMA_PID", "0") or 0)
+_SUPERVISOR_INTERVAL_SECONDS = 5.0
+
+
+def process_is_alive(pid: int) -> bool:
+    if pid <= 1:
+        return False
+    if os.name == "nt":
+        # `os.kill` on Windows terminates rather than probes, so the liveness
+        # check has to go through the API directly.
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Owned by another user: it exists, which is all we asked.
+        return True
+    return True
+
+
+def stop_owned_ollama() -> None:
+    """Stop the model server, but only the instance the app started itself."""
+    if not OLLAMA_PID or not process_is_alive(OLLAMA_PID):
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(OLLAMA_PID), "/T", "/F"],
+            check=False,
+            capture_output=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return
+    try:
+        os.kill(OLLAMA_PID, signal.SIGTERM)
+    except OSError:
+        return
+    for _ in range(30):
+        if not process_is_alive(OLLAMA_PID):
+            return
+        time.sleep(0.1)
+    try:
+        os.kill(OLLAMA_PID, signal.SIGKILL)
+    except OSError:
+        pass
+
+
+def shutdown_orphaned_engine() -> None:
+    with _JOB_LOCK:
+        events = list(_JOB_EVENTS.values())
+    for event in events:
+        event.set()
+    cancel_all_translation_processes()
+    stop_owned_ollama()
+    sweep_orphan_jobs()
+    # Hard exit on purpose: a graceful uvicorn shutdown waits for in-flight
+    # requests, and the client that would have closed them no longer exists.
+    os._exit(0)
+
+
+def parent_is_gone() -> bool:
+    """Has the desktop app that spawned this engine disappeared?
+
+    On POSIX the answer is immediate and unambiguous: the engine is a direct
+    child of the app, so when the app dies the kernel re-parents the engine to
+    init. Comparing the current parent against the expected one therefore beats
+    probing the pid, which can still succeed while the app is a zombie and can
+    be misled by pid reuse. Windows has no such relationship, so there the
+    process handle is queried instead.
+    """
+    if os.name != "nt" and os.getppid() != APP_PID:
+        return True
+    return not process_is_alive(APP_PID)
+
+
+async def _supervise_parent() -> None:
+    if not APP_PID:
+        # Started by hand, e.g. for development: nobody to outlive.
+        return
+    while True:
+        await asyncio.sleep(_SUPERVISOR_INTERVAL_SECONDS)
+        if parent_is_gone():
+            shutdown_orphaned_engine()
+
+
 def sweep_orphan_jobs() -> None:
     """Remove working copies left behind by a previous run.
 
@@ -352,13 +458,15 @@ async def _prune_loop() -> None:
 async def start_background_maintenance() -> None:
     sweep_orphan_jobs()
     app.state.pruner = asyncio.create_task(_prune_loop())
+    app.state.supervisor = asyncio.create_task(_supervise_parent())
 
 
 @app.on_event("shutdown")
 async def stop_child_processes() -> None:
-    pruner = getattr(app.state, "pruner", None)
-    if pruner is not None:
-        pruner.cancel()
+    for name in ("pruner", "supervisor"):
+        task = getattr(app.state, name, None)
+        if task is not None:
+            task.cancel()
     with _JOB_LOCK:
         events = list(_JOB_EVENTS.values())
     for event in events:

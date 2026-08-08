@@ -90,6 +90,10 @@ PYTHONPATH=engine python -m unittest discover -s engine/tests -v
 - **Non uccidere i processi figli con `child.kill()`**: usa
   `process::stop_process_tree`, altrimenti i worker di traduzione sopravvivono
   alla chiusura della finestra.
+- **Non avviare il motore senza `LOCAL_AI_APP_PID`**: senza quella variabile il
+  supervisore è disattivato e un crash dell'app lascia motori e modelli accesi
+  sul computer dell'utente. Serve anche `LOCAL_AI_ENGINE_TOKEN`, altrimenti il
+  backend rifiuta ogni richiesta con 503.
 - **Non archiviare le sorgenti del Drop rapido.** Restano fuori dal database per
   scelta: è il motivo per cui il retry funziona solo su fonti in Libreria.
 - **Non aggiungere client HTTP verso i motori senza token**: usa

@@ -88,7 +88,9 @@ l'originale o i risultati.
 - dati, modelli e cache nel profilo dell'utente;
 - aggiornamenti firmati Ed25519 con controllo automatico, progresso e riavvio esplicito;
 - motori raggiungibili solo con il token generato all'avvio, mai da una pagina web;
-- alla chiusura viene terminato l'intero albero dei processi avviati dall'app;
+- alla chiusura viene terminato l'intero albero dei processi avviati dall'app,
+  e i motori si spengono da soli se l'app scompare per un crash o un'uscita
+  forzata: nulla resta acceso sul computer;
 - una sola istanza per volta e motori che puoi fermare quando non ti servono;
 - CSP restrittiva, CI multipiattaforma, CodeQL, SBOM e checksum di release;
 - tema chiaro e scuro, tastiera, scorciatoie native e movimento ridotto.

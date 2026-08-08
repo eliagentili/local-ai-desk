@@ -107,6 +107,11 @@ numero.
   inviargli documenti o interromperne i lavori;
 - alla chiusura l'app termina l'intero process group dei motori, prima con
   SIGTERM e poi a forza: nessun worker di traduzione sopravvive alla finestra;
+- il motore sorveglia a sua volta l'app che lo ha avviato e si spegne entro
+  cinque secondi se questa sparisce, portando con sé Ollama e le copie di
+  lavoro. Vale anche per un crash, un'Uscita forzata o un `kill -9`, dove
+  nessuna pulizia lato app può essere eseguita: sul computer dell'utente non
+  restano processi né modelli in memoria;
 - una sola istanza per volta: un secondo avvio riporta in primo piano la finestra
   esistente invece di contendersi database, porta e processi dei motori;
 - i pid dei motori sono registrati con il nome dell'eseguibile, così la pulizia

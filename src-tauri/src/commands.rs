@@ -243,6 +243,17 @@ fn spawn_ollama_process(state: &AppState) -> Result<(), String> {
     Ok(())
 }
 
+/// Pid of the model server only when we started it ourselves. An instance that
+/// was already running belongs to the user, and is never ours to stop.
+fn owned_ollama_pid(state: &AppState) -> String {
+    state
+        .ollama_process
+        .lock()
+        .ok()
+        .and_then(|process| process.as_ref().map(|child| child.id().to_string()))
+        .unwrap_or_default()
+}
+
 fn spawn_runtime_process(state: &AppState) -> Result<(), String> {
     if loopback_runtime_available() || process_is_running(&state.runtime_process) {
         return Ok(());
@@ -273,6 +284,10 @@ fn spawn_runtime_process(state: &AppState) -> Result<(), String> {
         .current_dir(&state.engine_resource_dir)
         .env("LOCAL_AI_ENGINE_HOME", &state.engine_data_dir)
         .env("LOCAL_AI_ENGINE_TOKEN", engine_bridge::engine_token())
+        // The engine shuts itself down if this process disappears, so a crash
+        // or a force quit cannot leave models resident on the user's machine.
+        .env("LOCAL_AI_APP_PID", std::process::id().to_string())
+        .env("LOCAL_AI_OLLAMA_PID", owned_ollama_pid(state))
         .env("PYTHONUTF8", "1")
         .arg("-m")
         .arg("uvicorn")
