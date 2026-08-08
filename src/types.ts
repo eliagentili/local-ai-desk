@@ -55,6 +55,14 @@ export interface EngineStatus {
   state: string;
   label: string;
   version: string | null;
+  /** The model can be fetched separately, so a missing one is an action. */
+  downloadable: boolean;
+  packLabel: string | null;
+  packBytes: number;
+  downloadState: string | null;
+  downloadedBytes: number;
+  totalBytes: number;
+  downloadError: string | null;
 }
 
 export interface BridgeStatus {

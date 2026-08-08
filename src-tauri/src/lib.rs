@@ -164,6 +164,7 @@ pub fn run() {
             commands::export_results,
             commands::reveal_job_result,
             commands::reveal_path,
+            commands::download_engine_model,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Local AI Desk");

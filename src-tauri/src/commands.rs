@@ -656,22 +656,53 @@ pub(crate) async fn bridge_status() -> BridgeStatus {
         .map(|engines| {
             engines
                 .iter()
-                .map(|(id, engine)| EngineStatus {
-                    id: id.clone(),
-                    state: engine
-                        .get("state")
-                        .and_then(Value::as_str)
-                        .unwrap_or("unknown")
-                        .to_string(),
-                    label: engine
-                        .get("label")
-                        .and_then(Value::as_str)
-                        .unwrap_or("Stato sconosciuto")
-                        .to_string(),
-                    version: engine
-                        .get("version")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
+                .map(|(id, engine)| {
+                    let download = engine.get("download");
+                    let number = |value: Option<&Value>, key: &str| -> u64 {
+                        value
+                            .and_then(|value| value.get(key))
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0)
+                    };
+                    EngineStatus {
+                        id: id.clone(),
+                        state: engine
+                            .get("state")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unknown")
+                            .to_string(),
+                        label: engine
+                            .get("label")
+                            .and_then(Value::as_str)
+                            .unwrap_or("Stato sconosciuto")
+                            .to_string(),
+                        version: engine
+                            .get("version")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        downloadable: engine
+                            .get("downloadable")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                        pack_label: engine
+                            .get("pack_label")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        pack_bytes: engine
+                            .get("pack_bytes")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0),
+                        download_state: download
+                            .and_then(|value| value.get("state"))
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        downloaded_bytes: number(download, "downloaded_bytes"),
+                        total_bytes: number(download, "total_bytes"),
+                        download_error: download
+                            .and_then(|value| value.get("error"))
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                    }
                 })
                 .collect()
         })
@@ -1473,6 +1504,35 @@ pub async fn reveal_job_result(job_id: String, state: State<'_, AppState>) -> Re
     reveal(&canonical_output)
 }
 
+/// Ask the engine to fetch a model pack. Returns as soon as the download has
+/// started: progress arrives through the status the UI already polls.
+#[tauri::command]
+pub async fn download_engine_model(engine_id: String) -> Result<(), String> {
+    let client =
+        engine_bridge::engine_client(Duration::from_secs(2)).map_err(|error| error.to_string())?;
+    let response = client
+        .post(format!(
+            "http://127.0.0.1:8787/api/models/{engine_id}/download"
+        ))
+        .timeout(Duration::from_secs(20))
+        .send()
+        .await
+        .map_err(|_| "I motori locali non rispondono. Avviali da Modelli e riprova.".to_string())?;
+    if response.status().is_success() {
+        return Ok(());
+    }
+    let detail = response.text().await.unwrap_or_default();
+    Err(serde_json::from_str::<Value>(&detail)
+        .ok()
+        .and_then(|payload| {
+            payload
+                .get("detail")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "Download del modello non avviato".to_string()))
+}
+
 /// Show a diagnostics file in the system file manager. Confined to the app data
 /// directory so the UI can never turn this into a general "open anything" call.
 #[tauri::command]
@@ -1590,6 +1650,13 @@ mod tests {
                 state: state.to_string(),
                 label: "Da installare".to_string(),
                 version: None,
+                downloadable: false,
+                pack_label: None,
+                pack_bytes: 0,
+                download_state: None,
+                downloaded_bytes: 0,
+                total_bytes: 0,
+                download_error: None,
             }],
         };
         assert!(engine_not_ready(&bridge("missing"), "transcribe").is_some());

@@ -422,6 +422,19 @@ function App() {
     }
   }
 
+  async function handleDownloadModel(engineId: string) {
+    try {
+      await invoke("download_engine_model", { engineId });
+      setNotice({
+        tone: "success",
+        title: "Download avviato",
+        detail: "Puoi continuare a lavorare: l'avanzamento è in Modelli.",
+      });
+    } catch (error) {
+      setNotice({ tone: "error", title: "Download non avviato", detail: describeError(error) });
+    }
+  }
+
   async function handleRevealPath(path: string) {
     try {
       await invoke("reveal_path", { path });
@@ -568,6 +581,7 @@ function App() {
           bridge={snapshot.bridge}
           busy={runtimeBusy}
           hasActiveJobs={hasActiveJobs}
+          onDownloadModel={(engineId) => void handleDownloadModel(engineId)}
           onOpenLog={(path) => void handleRevealPath(path)}
           onRuntimeAction={() => void handleRuntimeAction()}
           onStopRuntime={() => void handleStopRuntime()}

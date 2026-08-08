@@ -4,13 +4,14 @@ import {
   FileText,
   HardDrive,
   Layers3,
+  DownloadCloud,
   LoaderCircle,
   Play,
   ShieldAlert,
   Square,
 } from "lucide-react";
 
-import { engineName } from "../lib/format";
+import { engineName, formatBytes } from "../lib/format";
 import type { BridgeStatus, RuntimeStatus, SystemSnapshot } from "../types";
 
 interface ModelsViewProps {
@@ -19,6 +20,7 @@ interface ModelsViewProps {
   hasActiveJobs: boolean;
   runtime: RuntimeStatus;
   system: SystemSnapshot;
+  onDownloadModel: (engineId: string) => void;
   onOpenLog: (path: string) => void;
   onRuntimeAction: () => void;
   onStopRuntime: () => void;
@@ -30,6 +32,7 @@ export function ModelsView({
   hasActiveJobs,
   runtime,
   system,
+  onDownloadModel,
   onOpenLog,
   onRuntimeAction,
   onStopRuntime,
@@ -145,25 +148,80 @@ export function ModelsView({
 
       <section className="model-grid" aria-label="Motori rilevati">
         {bridge.engines.length ? (
-          bridge.engines.map((engine) => (
-            <article className="model-card" key={engine.id}>
-              <div className="model-card-top">
-                <span className="model-monogram">
-                  {engineName(engine.id)
-                    .split(/\s|-/)
-                    .map((part) => part[0])
-                    .join("")
-                    .slice(0, 2)}
-                </span>
-                <span className="status-label" data-ready={engine.state === "ready"}>
-                  {engine.state === "ready" ? "Pronto" : engine.state}
-                </span>
-              </div>
-              <h3>{engineName(engine.id)}</h3>
-              <p>{engine.label}</p>
-              <small>{engine.version ? `Versione ${engine.version}` : "Modello locale"}</small>
-            </article>
-          ))
+          bridge.engines.map((engine) => {
+            const downloading = engine.downloadState === "downloading";
+            const percent =
+              downloading && engine.totalBytes > 0
+                ? Math.min(100, Math.round((engine.downloadedBytes / engine.totalBytes) * 100))
+                : null;
+            return (
+              <article className="model-card" key={engine.id}>
+                <div className="model-card-top">
+                  <span className="model-monogram">
+                    {engineName(engine.id)
+                      .split(/\s|-/)
+                      .map((part) => part[0])
+                      .join("")
+                      .slice(0, 2)}
+                  </span>
+                  <span className="status-label" data-ready={engine.state === "ready"}>
+                    {engine.state === "ready" ? "Pronto" : "Incompleto"}
+                  </span>
+                </div>
+                <h3>{engineName(engine.id)}</h3>
+                <p>{engine.label}</p>
+
+                {engine.state !== "ready" && engine.downloadable ? (
+                  <div className="model-pack">
+                    {downloading ? (
+                      <>
+                        <div
+                          aria-label={`Download di ${engine.packLabel ?? "modello"}`}
+                          aria-valuemax={percent === null ? undefined : 100}
+                          aria-valuemin={percent === null ? undefined : 0}
+                          aria-valuenow={percent ?? undefined}
+                          className="progress-track"
+                          data-indeterminate={percent === null}
+                          role="progressbar"
+                        >
+                          <span style={percent === null ? undefined : { width: `${percent}%` }} />
+                        </div>
+                        <small>
+                          {formatBytes(engine.downloadedBytes)}
+                          {engine.totalBytes > 0 ? ` di ${formatBytes(engine.totalBytes)}` : ""}
+                          {percent === null ? " scaricati" : ` · ${percent}%`}
+                        </small>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          className="button button-secondary button-compact"
+                          onClick={() => onDownloadModel(engine.id)}
+                          type="button"
+                        >
+                          <DownloadCloud size={15} />
+                          Scarica il modello
+                          {engine.packBytes > 0 ? ` · ${formatBytes(engine.packBytes)}` : ""}
+                        </button>
+                        {engine.downloadError ? (
+                          <small className="job-error">{engine.downloadError}</small>
+                        ) : (
+                          <small>
+                            Finché manca, questo motore lavora in modalità ridotta e lo
+                            dichiara nel risultato.
+                          </small>
+                        )}
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  <small>
+                    {engine.version ? `Versione ${engine.version}` : "Modello locale"}
+                  </small>
+                )}
+              </article>
+            );
+          })
         ) : (
           <div className="surface-panel model-empty">
             <h3>I motori non sono avviati</h3>

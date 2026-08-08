@@ -2474,6 +2474,61 @@ tbody tr:last-child td {
 
 /* ---------------------------------------------------------------- additions */
 
+.model-pack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 10px;
+}
+
+.model-pack .progress-track {
+  width: 100%;
+}
+
+.model-pack small {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.model-pack .button {
+  align-self: flex-start;
+}
+
+.exposure-note {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 16px 18px;
+  color: var(--ink);
+}
+
+.exposure-note svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--danger);
+}
+
+.exposure-note strong {
+  display: block;
+  font-size: var(--text-base);
+}
+
+.exposure-note p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.exposure-note code {
+  padding: 1px 5px;
+  font-size: 0.95em;
+  border-radius: 5px;
+  background: var(--surface-3);
+}
+
 .skip-link {
   position: absolute;
   z-index: 60;

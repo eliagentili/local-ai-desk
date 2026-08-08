@@ -97,6 +97,10 @@ PYTHONPATH=engine python -m unittest discover -s engine/tests -v
 - **Non riportare i modelli Ollama dentro la cartella dell'app.** Stanno in
   `~/.ollama/models` di proposito: sono modelli ufficiali del registro da quasi
   10 GB e duplicarli e' tempo e disco buttati. Il processo invece resta nostro.
+- **Non pubblicare un model pack fuori da una cartella di staging.** Scrivere
+  direttamente nella destinazione fa comparire `config.json` dopo pochi secondi
+  e `engine_status` dichiara il motore pronto mentre i pesi stanno ancora
+  scaricando: i lavori finiscono su un modello che non c'e'.
 - **Non archiviare le sorgenti del Drop rapido.** Restano fuori dal database per
   scelta: è il motivo per cui il retry funziona solo su fonti in Libreria.
 - **Non aggiungere client HTTP verso i motori senza token**: usa

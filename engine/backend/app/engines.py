@@ -7,6 +7,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -225,6 +226,16 @@ def engine_status() -> dict[str, Any]:
             "version": "2.9.0" if find_binary("pdf2zh_next") else None,
         },
     }
+    for name, payload in engines.items():
+        pack = MODEL_PACKS.get(name)
+        if pack is not None:
+            payload["downloadable"] = True
+            payload["pack_label"] = pack.label
+            payload["pack_bytes"] = pack.approximate_bytes
+        download = model_download_state(name)
+        if download is not None:
+            payload["download"] = download
+
     return {
         "local_only": True,
         "platform": f"{platform.system()} {platform.machine()}",
@@ -232,6 +243,158 @@ def engine_status() -> dict[str, Any]:
         "parallelism": ENGINE_CONCURRENCY,
         "engines": engines,
     }
+
+
+# --------------------------------------------------------------- model packs
+#
+# Most engines get their models during the one-off install. The Privacy Filter
+# checkpoint is 2.6 GB and only matters to people who mask personal data, so it
+# is fetched on request instead of being imposed on every installation. Until it
+# arrives the engine still works on the Italian rules alone, and says so.
+
+@dataclass
+class ModelPack:
+    engine: str
+    repo_id: str
+    label: str
+    target: Path
+    # Only this folder of the repository is the checkpoint we need.
+    subfolder: str
+    approximate_bytes: int
+
+
+MODEL_PACKS: dict[str, ModelPack] = {
+    "privacy": ModelPack(
+        engine="privacy",
+        repo_id="openai/privacy-filter",
+        label="Modello Privacy Filter",
+        target=Path(OPF_CHECKPOINT),
+        subfolder="original",
+        approximate_bytes=2_600_000_000,
+    ),
+}
+
+_MODEL_DOWNLOADS: dict[str, dict[str, Any]] = {}
+_MODEL_DOWNLOAD_LOCK = threading.Lock()
+
+
+def _directory_bytes(path: Path) -> int:
+    total = 0
+    for entry in path.rglob("*"):
+        try:
+            if entry.is_file():
+                total += entry.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def _set_download_state(engine: str, **updates: Any) -> None:
+    with _MODEL_DOWNLOAD_LOCK:
+        _MODEL_DOWNLOADS.setdefault(engine, {}).update(updates)
+
+
+def model_download_state(engine: str) -> dict[str, Any] | None:
+    with _MODEL_DOWNLOAD_LOCK:
+        state = _MODEL_DOWNLOADS.get(engine)
+        return dict(state) if state else None
+
+
+def _run_model_download(pack: ModelPack) -> None:
+    """Fetch a model pack into place, or leave no trace at all.
+
+    The download lands in a staging folder and is moved into the target only
+    once complete. Writing straight into the target would publish `config.json`
+    within seconds, and `engine_status` would report the engine ready while its
+    weights were still arriving — sending jobs to a model that is not there.
+    """
+    staging = pack.target.with_name(pack.target.name + ".incoming")
+    stop_watching = threading.Event()
+
+    def watch() -> None:
+        while not stop_watching.wait(1.0):
+            _set_download_state(pack.engine, downloaded_bytes=_directory_bytes(staging))
+
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
+    try:
+        from huggingface_hub import snapshot_download
+
+        # The repository ships several variants; only this one is the
+        # checkpoint the filter loads. Without the filter it would be ~17 GB.
+        patterns = [f"{pack.subfolder}/*"]
+
+        total = pack.approximate_bytes
+        try:
+            from huggingface_hub import HfApi
+
+            info = HfApi().model_info(pack.repo_id, files_metadata=True)
+            measured = sum(
+                sibling.size or 0
+                for sibling in (info.siblings or [])
+                if sibling.rfilename.startswith(f"{pack.subfolder}/")
+            )
+            if measured > 0:
+                total = measured
+        except Exception:
+            # An estimate keeps the bar honest enough; real bytes still win.
+            pass
+        _set_download_state(pack.engine, total_bytes=total)
+
+        shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir(parents=True, exist_ok=True)
+        snapshot_download(
+            repo_id=pack.repo_id,
+            local_dir=str(staging),
+            allow_patterns=patterns,
+        )
+
+        source = staging / pack.subfolder
+        if not any(source.glob("*.safetensors")):
+            raise RuntimeError("il pacchetto scaricato non contiene i pesi del modello")
+
+        # Publish in one step, so the engine is never half-ready.
+        shutil.rmtree(pack.target, ignore_errors=True)
+        pack.target.parent.mkdir(parents=True, exist_ok=True)
+        source.rename(pack.target)
+        shutil.rmtree(staging, ignore_errors=True)
+
+        _set_download_state(
+            pack.engine,
+            state="ready",
+            downloaded_bytes=_directory_bytes(pack.target),
+        )
+    except Exception as exc:
+        shutil.rmtree(staging, ignore_errors=True)
+        _set_download_state(
+            pack.engine,
+            state="error",
+            error=(
+                "Download del modello non riuscito: verifica la connessione e riprova. "
+                f"({type(exc).__name__})"
+            ),
+        )
+    finally:
+        stop_watching.set()
+
+
+def start_model_download(engine: str) -> dict[str, Any]:
+    pack = MODEL_PACKS.get(engine)
+    if pack is None:
+        raise KeyError(engine)
+    with _MODEL_DOWNLOAD_LOCK:
+        current = _MODEL_DOWNLOADS.get(engine, {})
+        if current.get("state") == "downloading":
+            return dict(current)
+        _MODEL_DOWNLOADS[engine] = {
+            "state": "downloading",
+            "label": pack.label,
+            "downloaded_bytes": 0,
+            "total_bytes": pack.approximate_bytes,
+            "error": None,
+        }
+    threading.Thread(target=_run_model_download, args=(pack,), daemon=True).start()
+    return model_download_state(engine) or {}
 
 
 def _stop_translation_process(process: subprocess.Popen) -> None:

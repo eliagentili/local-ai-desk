@@ -25,9 +25,11 @@ from .engines import (
     ProcessingCancelled,
     cancel_all_translation_processes,
     engine_status,
+    model_download_state,
     process_file,
     process_pdf_translation,
     process_text,
+    start_model_download,
 )
 
 
@@ -153,6 +155,30 @@ def status():
     payload["streaming_uploads"] = True
     payload["max_file_bytes"] = MAX_FILE_BYTES or None
     return payload
+
+
+@app.post("/api/models/{engine_id}/download")
+def download_model(engine_id: str):
+    """Fetch an engine's model pack on request.
+
+    Returns immediately: the download runs in the background and its progress
+    appears in `/api/status`, which the app already polls.
+    """
+    try:
+        return start_model_download(engine_id)
+    except KeyError as exc:
+        raise HTTPException(
+            404, "Questo motore non ha un modello scaricabile separatamente."
+        ) from exc
+
+
+@app.get("/api/models/{engine_id}/download")
+def model_download_status(engine_id: str, response: Response):
+    state = model_download_state(engine_id)
+    if state is None:
+        raise HTTPException(404, "Nessun download in corso per questo motore.")
+    response.headers["Cache-Control"] = "no-store"
+    return state
 
 
 def safe_name(name: str) -> str:

@@ -63,6 +63,14 @@ modello gia' presente e sposta lo store privato delle versioni precedenti invece
 di riscaricarlo. Un `OLLAMA_MODELS` impostato dall'utente ha sempre la
 precedenza: chi ha spostato i modelli su un disco esterno ha gia' deciso.
 
+Il checkpoint del Privacy Filter (2,6 GB) non fa parte dell'installazione: lo
+scarica l'utente da Modelli quando gli serve. Arriva in una cartella di staging
+e viene spostato in posizione solo a download completo, perche' scrivendo
+direttamente nella destinazione `config.json` comparirebbe dopo pochi secondi e
+`engine_status` dichiarerebbe il motore pronto mentre i pesi stanno ancora
+arrivando. Fino ad allora Privacy Shield lavora sulle sole regole italiane e lo
+dichiara nel risultato.
+
 Il processo resta invece nostro: l'app avvia il proprio server con la versione
 pinnata e `OLLAMA_HOST=127.0.0.1`, e lo supervisiona. Se ne trova gia' uno in
 esecuzione lo adotta senza spegnerlo mai, perche' appartiene all'utente; in quel

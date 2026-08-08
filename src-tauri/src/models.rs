@@ -67,6 +67,16 @@ pub struct EngineStatus {
     pub state: String,
     pub label: String,
     pub version: Option<String>,
+    /// This engine's model can be fetched separately, so a missing one is an
+    /// action the user can take rather than a dead end.
+    pub downloadable: bool,
+    pub pack_label: Option<String>,
+    pub pack_bytes: u64,
+    /// Progress of a download in flight: `downloading`, `ready` or `error`.
+    pub download_state: Option<String>,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+    pub download_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
