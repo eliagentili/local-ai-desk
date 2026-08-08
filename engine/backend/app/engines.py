@@ -308,7 +308,7 @@ def translate_pdf(
     cli = find_binary("pdf2zh_next")
     if not cli:
         raise RuntimeError(
-            "Il motore di traduzione PDF non è installato. Apri Modelli e completa\n            l'installazione del runtime locale."
+            "Il motore di traduzione PDF non è installato. Apri Modelli e completa l'installazione del runtime locale."
         )
     try:
         tags = _ollama_request("/api/tags")
@@ -486,7 +486,7 @@ def convert_markitdown(
         from markitdown import MarkItDown
     except ImportError as exc:
         raise RuntimeError(
-            "Il motore di conversione documenti non è installato. Apri Modelli e\n            completa l'installazione del runtime locale."
+            "Il motore di conversione documenti non è installato. Apri Modelli e completa l'installazione del runtime locale."
         ) from exc
 
     result = MarkItDown(enable_plugins=False).convert(str(path))
@@ -535,7 +535,7 @@ def _paddle_pipeline():
         from paddleocr import PPStructureV3
     except ImportError as exc:
         raise RuntimeError(
-            "Il motore OCR non è installato. Apri Modelli e completa l'installazione\n            del runtime locale."
+            "Il motore OCR non è installato. Apri Modelli e completa l'installazione del runtime locale."
         ) from exc
 
     options: dict[str, Any] = {
@@ -672,7 +672,7 @@ def convert_glm(
         _ollama_request("/api/tags")
     except Exception as exc:
         raise RuntimeError(
-            "Il servizio locale dei modelli non è avviato. Apri Modelli e premi\n            «Avvia motori»."
+            "Il servizio locale dei modelli non è avviato. Apri Modelli e premi «Avvia motori»."
         ) from exc
 
     with tempfile.TemporaryDirectory(prefix="glm-pages-") as raw_dir:
@@ -737,7 +737,7 @@ def _whisper_model():
             from faster_whisper import WhisperModel
         except ImportError as exc:
             raise RuntimeError(
-                "Il motore di trascrizione non è installato. Apri Modelli e completa\n            l'installazione del runtime locale."
+                "Il motore di trascrizione non è installato. Apri Modelli e completa l'installazione del runtime locale."
             ) from exc
         _WHISPER_MODEL_INSTANCE = WhisperModel(
             WHISPER_MODEL,
@@ -883,14 +883,19 @@ def _privacy_filter():
     return OPF(model=OPF_CHECKPOINT, device="cpu")
 
 
-def _opf_redact(text: str) -> tuple[str, list[dict[str, Any]], str | None]:
+def _opf_redact(text: str) -> tuple[str, list[dict[str, Any]], str | None, bool]:
+    """Returns (text, spans, warning, model_ran).
+
+    `model_ran` is what decides the engine label: a caveat emitted *by* the
+    model is not the same thing as the model never having run.
+    """
     opf = find_binary("opf")
     if not opf:
         return text, [], (
             "Il modello Privacy Filter non è installato: sono state applicate soltanto "
             "le regole italiane locali. Completa l'installazione da Modelli per una "
             "copertura più ampia."
-        )
+        ), False
 
     try:
         result = _privacy_filter().redact(text)
@@ -899,12 +904,13 @@ def _opf_redact(text: str) -> tuple[str, list[dict[str, Any]], str | None]:
             payload.get("redacted_text", text),
             payload.get("detected_spans", []),
             payload.get("warning"),
+            True,
         )
     except Exception:
         return text, [], (
             "Il modello Privacy Filter non ha risposto: sono state applicate soltanto "
             "le regole italiane locali."
-        )
+        ), False
 
 
 def protect_text(
@@ -913,7 +919,7 @@ def protect_text(
     cancel_event: threading.Event | None = None,
 ) -> EngineResult:
     _raise_if_cancelled(cancel_event)
-    opf_text, opf_spans, warning = _opf_redact(text)
+    opf_text, opf_spans, warning, model_ran = _opf_redact(text)
     _raise_if_cancelled(cancel_event)
     redacted, regex_spans = _regex_redact(opf_text)
     spans = [*opf_spans, *regex_spans]
@@ -943,9 +949,9 @@ def protect_text(
         # Name the engine that actually ran: claiming the full filter when only
         # the regex rules were available would overstate the protection applied.
         engine=(
-            "Regole italiane locali (modello Privacy Filter non disponibile)"
-            if warning
-            else "Privacy Filter + rilevatori italiani"
+            "Privacy Filter + rilevatori italiani"
+            if model_ran
+            else "Regole italiane locali (modello Privacy Filter non disponibile)"
         ),
         output_format=output_format,
         warnings=warnings,

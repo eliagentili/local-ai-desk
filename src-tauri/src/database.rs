@@ -540,6 +540,7 @@ mod tests {
         let library_item = list_library(&path).expect("library").remove(0);
         let spec = JobSpec {
             id: "job-1".to_string(),
+            engine_job_id: "job-1".to_string(),
             batch_id: "batch-1".to_string(),
             library_item_id: Some(library_item.id.clone()),
             item: library_item,
@@ -599,6 +600,7 @@ mod tests {
         let now = "2026-08-06T10:00:00Z".to_string();
         let spec = JobSpec {
             id: "late-cancel".to_string(),
+            engine_job_id: "late-cancel".to_string(),
             batch_id: "batch".to_string(),
             library_item_id: None,
             item: LibraryItem {
@@ -663,6 +665,7 @@ mod tests {
         let now = "2026-08-06T10:00:00Z".to_string();
         let spec = JobSpec {
             id: "retryable".to_string(),
+            engine_job_id: "retryable".to_string(),
             batch_id: "batch".to_string(),
             library_item_id: None,
             item: LibraryItem {
@@ -731,6 +734,7 @@ mod tests {
         let now = "2026-08-06T10:00:00Z".to_string();
         let spec = JobSpec {
             id: "degraded".to_string(),
+            engine_job_id: "degraded".to_string(),
             batch_id: "batch".to_string(),
             library_item_id: None,
             item: LibraryItem {
@@ -785,6 +789,7 @@ mod tests {
             let stamp = format!("2026-08-0{}T10:00:00Z", index + 1);
             let spec = JobSpec {
                 id: format!("job-{index}"),
+                engine_job_id: format!("job-{index}"),
                 batch_id: format!("batch-{index}"),
                 library_item_id: None,
                 item: LibraryItem {
@@ -829,6 +834,7 @@ mod tests {
         let now = "2026-08-06T10:00:00Z".to_string();
         let spec = JobSpec {
             id: "quick-job".to_string(),
+            engine_job_id: "quick-job".to_string(),
             batch_id: "quick-batch".to_string(),
             library_item_id: None,
             item: LibraryItem {

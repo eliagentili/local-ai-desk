@@ -15,7 +15,15 @@ use std::{
 };
 
 /// How long a process group may take to exit on its own before being killed.
+///
+/// Windows has no equivalent of SIGTERM for a windowless console process: an
+/// unforced `taskkill` cannot reach one, so waiting for it to comply is pure
+/// delay on every quit. There the tree is ended at once and the wait is only
+/// long enough to reap it.
+#[cfg(unix)]
 const GRACE_PERIOD: Duration = Duration::from_millis(3_000);
+#[cfg(windows)]
+const GRACE_PERIOD: Duration = Duration::from_millis(400);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 pub type ProcessSlot = Arc<Mutex<Option<Child>>>;
@@ -62,8 +70,10 @@ fn signal_group(pid: u32, force: bool) {
 fn request_exit(pid: u32) {
     #[cfg(unix)]
     signal_group(pid, libc::SIGTERM);
+    // Unforced taskkill only posts WM_CLOSE, which a windowless child never
+    // receives, so on Windows the polite request is already the forceful one.
     #[cfg(windows)]
-    signal_group(pid, false);
+    signal_group(pid, true);
 }
 
 fn force_exit(pid: u32) {
@@ -116,55 +126,89 @@ fn pid_file(engine_data_dir: &Path, name: &str) -> PathBuf {
     engine_data_dir.join(format!("{name}.pid"))
 }
 
-/// Record the pid of a freshly spawned process so a later run can clean it up
-/// if this one is force-quit or crashes before it can terminate the tree.
+/// Identity of the process that a pid file refers to.
+///
+/// The pid alone is not enough: operating systems recycle pids, and signalling
+/// a recycled one would kill an unrelated program the user is running. The
+/// executable name recorded at spawn time is compared before anything is sent.
+fn process_identity(pid: u32) -> Option<String> {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
+        true,
+        ProcessRefreshKind::nothing(),
+    );
+    system
+        .process(Pid::from_u32(pid))
+        .map(|process| process.name().to_string_lossy().to_ascii_lowercase())
+}
+
+/// Record a freshly spawned process so a later run can clean it up if this one
+/// is force-quit or crashes before it can terminate the tree.
 pub fn remember(engine_data_dir: &Path, name: &str, pid: u32) {
     let _ = fs::create_dir_all(engine_data_dir);
-    let _ = fs::write(pid_file(engine_data_dir, name), pid.to_string());
+    let identity = process_identity(pid).unwrap_or_default();
+    let _ = fs::write(
+        pid_file(engine_data_dir, name),
+        format!("{pid}\n{identity}"),
+    );
 }
 
+/// Remove our own registration only. A second instance that started in the
+/// meantime owns the file now, and erasing its entry would leave its engines
+/// unrecoverable after a crash.
 pub fn forget(engine_data_dir: &Path, name: &str) {
-    let _ = fs::remove_file(pid_file(engine_data_dir, name));
-}
-
-#[cfg(unix)]
-fn process_exists(pid: u32) -> bool {
-    // Signal 0 performs the permission and existence checks without delivering.
-    unsafe { libc::kill(pid as i32, 0) == 0 }
-}
-
-#[cfg(windows)]
-fn process_exists(pid: u32) -> bool {
-    let Ok(output) = Command::new("tasklist.exe")
-        .arg("/FI")
-        .arg(format!("PID eq {pid}"))
-        .arg("/NH")
-        .output()
-    else {
-        return false;
+    let path = pid_file(engine_data_dir, name);
+    let Ok(raw) = fs::read_to_string(&path) else {
+        return;
     };
-    String::from_utf8_lossy(&output.stdout).contains(&pid.to_string())
+    let recorded: Option<u32> = raw.lines().next().and_then(|line| line.trim().parse().ok());
+    if recorded.is_some_and(|pid| process_identity(pid).is_none()) {
+        let _ = fs::remove_file(&path);
+    }
+}
+
+/// Drop a registration unconditionally, once its process is known to be gone.
+pub fn forget_now(engine_data_dir: &Path, name: &str) {
+    let _ = fs::remove_file(pid_file(engine_data_dir, name));
 }
 
 /// A leftover pid file means the previous run did not shut down cleanly.
 /// Terminate whatever it left behind before starting a new runtime, so engine
 /// processes cannot accumulate across crashes.
+///
+/// Returns `true` only when a process we recognise was actually terminated.
 pub fn reap_orphan(engine_data_dir: &Path, name: &str) -> bool {
     let path = pid_file(engine_data_dir, name);
     let Ok(raw) = fs::read_to_string(&path) else {
         return false;
     };
+    let mut lines = raw.lines();
+    let recorded_pid = lines.next().unwrap_or_default().trim().to_string();
+    let recorded_identity = lines.next().unwrap_or_default().trim().to_ascii_lowercase();
     let _ = fs::remove_file(&path);
-    let Ok(pid) = raw.trim().parse::<u32>() else {
+
+    let Ok(pid) = recorded_pid.parse::<u32>() else {
         return false;
     };
-    if pid <= 1 || !process_exists(pid) {
+    if pid <= 1 {
         return false;
     }
+    let Some(identity) = process_identity(pid) else {
+        // Already gone: nothing to terminate, and nothing to signal blindly.
+        return false;
+    };
+    // The pid may have been recycled onto an unrelated program since it was
+    // written. Only a matching executable name proves this is still ours.
+    if recorded_identity.is_empty() || identity != recorded_identity {
+        return false;
+    }
+
     request_exit(pid);
     let deadline = std::time::Instant::now() + GRACE_PERIOD;
     while std::time::Instant::now() < deadline {
-        if !process_exists(pid) {
+        if process_identity(pid).is_none() {
             return true;
         }
         std::thread::sleep(POLL_INTERVAL);
@@ -178,26 +222,51 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pid_files_round_trip_and_ignore_dead_processes() {
+    fn a_recycled_pid_is_never_signalled() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let data_dir = temporary.path();
 
         assert!(
             !reap_orphan(data_dir, "runtime"),
-            "no pid file, nothing to do"
+            "no pid file means nothing to do"
         );
 
-        // A pid that cannot belong to a live engine must be discarded, not signalled.
-        remember(data_dir, "runtime", 0);
+        // Our own pid is alive, but it was recorded under a different name:
+        // that is exactly what a recycled pid looks like, and it must be spared.
+        let own_pid = std::process::id();
+        let _ = fs::create_dir_all(data_dir);
+        fs::write(
+            pid_file(data_dir, "runtime"),
+            format!("{own_pid}\nun-programma-che-non-abbiamo-avviato"),
+        )
+        .expect("pid file");
         assert!(!reap_orphan(data_dir, "runtime"));
         assert!(
             !pid_file(data_dir, "runtime").exists(),
-            "a stale pid file is always removed"
+            "the stale registration is cleared either way"
         );
 
-        remember(data_dir, "runtime", 4242);
-        assert!(pid_file(data_dir, "runtime").exists());
+        // A pid file with no identity at all is equally untrustworthy.
+        fs::write(pid_file(data_dir, "runtime"), format!("{own_pid}")).expect("pid file");
+        assert!(!reap_orphan(data_dir, "runtime"));
+
+        // A pid that no longer exists is simply forgotten.
+        remember(data_dir, "ollama", 0);
+        assert!(!reap_orphan(data_dir, "ollama"));
+    }
+
+    #[test]
+    fn a_registration_is_only_dropped_once_its_process_is_gone() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let data_dir = temporary.path();
+
+        // A live process keeps its registration: erasing it would make the
+        // engines of a still-running instance unrecoverable after a crash.
+        remember(data_dir, "runtime", std::process::id());
         forget(data_dir, "runtime");
+        assert!(pid_file(data_dir, "runtime").exists());
+
+        forget_now(data_dir, "runtime");
         assert!(!pid_file(data_dir, "runtime").exists());
     }
 
@@ -222,6 +291,6 @@ mod tests {
             slot.lock().expect("slot").is_none(),
             "the reaped child is cleared from the slot"
         );
-        assert!(!process_exists(pid), "the process group is gone");
+        assert!(process_identity(pid).is_none(), "the process group is gone");
     }
 }

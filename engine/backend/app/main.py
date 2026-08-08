@@ -57,7 +57,11 @@ async def require_local_caller(request: Request, call_next):
                 {"detail": "Richieste dal browser non ammesse."}, status_code=403
             )
         presented = request.headers.get("x-local-token", "")
-        if not hmac.compare_digest(presented, ENGINE_TOKEN):
+        # compare_digest rejects non-ASCII str operands with TypeError, which
+        # would answer a malformed header with a 500 and a traceback.
+        if not hmac.compare_digest(
+            presented.encode("utf-8", "replace"), ENGINE_TOKEN.encode("utf-8")
+        ):
             return JSONResponse({"detail": "Token locale non valido."}, status_code=401)
     return await call_next(request)
 

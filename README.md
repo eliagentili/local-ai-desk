@@ -89,6 +89,7 @@ l'originale o i risultati.
 - aggiornamenti firmati Ed25519 con controllo automatico, progresso e riavvio esplicito;
 - motori raggiungibili solo con il token generato all'avvio, mai da una pagina web;
 - alla chiusura viene terminato l'intero albero dei processi avviati dall'app;
+- una sola istanza per volta e motori che puoi fermare quando non ti servono;
 - CSP restrittiva, CI multipiattaforma, CodeQL, SBOM e checksum di release;
 - tema chiaro e scuro, tastiera, scorciatoie native e movimento ridotto.
 

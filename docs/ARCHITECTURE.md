@@ -107,6 +107,11 @@ numero.
   inviargli documenti o interromperne i lavori;
 - alla chiusura l'app termina l'intero process group dei motori, prima con
   SIGTERM e poi a forza: nessun worker di traduzione sopravvive alla finestra;
+- una sola istanza per volta: un secondo avvio riporta in primo piano la finestra
+  esistente invece di contendersi database, porta e processi dei motori;
+- i pid dei motori sono registrati con il nome dell'eseguibile, così la pulizia
+  degli orfani dopo un crash non può colpire un pid riciclato da un altro
+  programma;
 - i file di lavoro rimasti da una sessione interrotta vengono rimossi all'avvio
   successivo, insieme ai risultati `.partial` incompleti;
 - futuro download dei pack con firma, checksum e manifest bloccato per versione.

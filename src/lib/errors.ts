@@ -47,9 +47,13 @@ const mappings: Mapping[] = [
 ];
 
 export function describeError(error: unknown): string {
-  const raw = typeof error === "string" ? error : error instanceof Error ? error.message : String(error);
+  const raw =
+    typeof error === "string" ? error : error instanceof Error ? error.message : String(error);
   const trimmed = raw.replace(/^Error:\s*/i, "").trim();
   if (!trimmed) return "Si è verificato un errore imprevisto. Riprova.";
   const known = mappings.find((mapping) => mapping.match.test(trimmed));
-  return known ? known.message : trimmed;
+  if (!known) return trimmed;
+  // Keep the original text: several backend errors already carry the tail of a
+  // log, which is the only clue the user has about what actually failed.
+  return `${known.message} · ${trimmed}`;
 }

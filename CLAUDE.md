@@ -94,6 +94,11 @@ PYTHONPATH=engine python -m unittest discover -s engine/tests -v
   scelta: è il motivo per cui il retry funziona solo su fonti in Libreria.
 - **Non aggiungere client HTTP verso i motori senza token**: usa
   `engine_bridge::engine_client`.
+- **Non usare `Result::and`/`or` con un `.await` come argomento**: vengono
+  valutati sempre, anche sul ramo di errore. È così che un PDF troncato veniva
+  promosso a risultato definitivo dopo un annullamento.
+- **Non derivare elenchi di id da `list_jobs`**: è una finestra limitata a
+  `JOB_HISTORY_LIMIT`. Costruiscili da ciò che hai appena inserito.
 
 ## Stato corrente
 

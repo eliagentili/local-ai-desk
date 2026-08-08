@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 
-import { formatBytes } from "../lib/format";
+import { engineName, formatBytes } from "../lib/format";
 import type {
   BridgeStatus,
   LibraryItem,
@@ -474,8 +474,8 @@ export function StudioView({
           </button>
           {engineBlocked && requiredEngine ? (
             <p className="config-blocked" role="status">
-              Motore non pronto: {requiredEngine.label}. Completa l’installazione da
-              Modelli prima di avviare questo tipo di lavoro.
+              {engineName(requiredEngine.id)} non è pronto: {requiredEngine.label}.
+              Completa l’installazione da Modelli prima di avviare questo tipo di lavoro.
             </p>
           ) : null}
           <p className="config-note">

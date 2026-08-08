@@ -56,6 +56,18 @@ class LocalAccessControlTests(unittest.TestCase):
         response = client.post("/api/jobs/any-job/cancel")
         self.assertEqual(response.status_code, 401)
 
+    def test_a_non_ascii_token_is_refused_and_not_a_crash(self):
+        # HTTP header values are latin-1, so a raw byte above 0x7F reaches the
+        # middleware as a non-ASCII str. compare_digest raises TypeError on
+        # those, which would answer a malformed header with a 500 and a
+        # traceback instead of a plain refusal. Sent as bytes because a client
+        # will not encode such a value from a str.
+        main.ENGINE_TOKEN = TEST_TOKEN
+        client = TestClient(
+            main.app, headers={"X-Local-Token": "chiave-è-sbagliata".encode("latin-1")}
+        )
+        self.assertEqual(client.get("/api/health").status_code, 401)
+
     def test_an_engine_started_without_a_token_refuses_everything(self):
         # Fail closed: a missing token must never mean "no authentication".
         main.ENGINE_TOKEN = ""

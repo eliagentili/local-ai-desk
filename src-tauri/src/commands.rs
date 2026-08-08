@@ -175,7 +175,7 @@ fn install_process_is_running(state: &AppState) -> bool {
         }
     };
     if let Some(result) = result {
-        process::forget(&state.engine_data_dir, "install");
+        process::forget_now(&state.engine_data_dir, "install");
         if let Ok(mut last_result) = state.last_install_result.lock() {
             *last_result = Some(result);
         }
@@ -218,7 +218,9 @@ fn spawn_ollama_process(state: &AppState) -> Result<(), String> {
     }
     let models = state.engine_data_dir.join("models").join("ollama");
     fs::create_dir_all(&models).map_err(|error| error.to_string())?;
-    let stdout = append_log(&state.engine_data_dir.join("ollama.log"))?;
+    let ollama_log = state.engine_data_dir.join("ollama.log");
+    rotate_log_if_large(&ollama_log);
+    let stdout = append_log(&ollama_log)?;
     let stderr = stdout.try_clone().map_err(|error| error.to_string())?;
     let mut command = Command::new(executable);
     command
@@ -263,6 +265,7 @@ fn spawn_runtime_process(state: &AppState) -> Result<(), String> {
     }
     fs::create_dir_all(&state.engine_data_dir).map_err(|error| error.to_string())?;
     let log_path = state.engine_data_dir.join("runtime.log");
+    rotate_log_if_large(&log_path);
     let stdout = append_log(&log_path)?;
     let stderr = stdout.try_clone().map_err(|error| error.to_string())?;
     let mut command = Command::new(python);
@@ -295,19 +298,31 @@ fn spawn_runtime_process(state: &AppState) -> Result<(), String> {
 /// Terminate every engine process this app is responsible for. Ollama goes last
 /// so the runtime can still reach it while it shuts its own workers down.
 pub(crate) fn stop_engine_processes(state: &AppState) {
-    process::stop_process_tree(&state.runtime_process);
-    process::forget(&state.engine_data_dir, "runtime");
-    process::stop_process_tree(&state.ollama_process);
-    process::forget(&state.engine_data_dir, "ollama");
-    process::stop_process_tree(&state.installer_process);
-    process::forget(&state.engine_data_dir, "install");
+    for (slot, name) in [
+        (&state.runtime_process, "runtime"),
+        (&state.ollama_process, "ollama"),
+        (&state.installer_process, "install"),
+    ] {
+        process::stop_process_tree(slot);
+        // Compare-and-delete: a registration that no longer describes a live
+        // process is ours to drop, anyone else's is left alone.
+        process::forget(&state.engine_data_dir, name);
+    }
 }
 
 pub(crate) fn try_start_installed_runtime(state: &AppState) {
     // A pid file that survived the previous run means the app was force-quit or
     // crashed: clean up whatever it left running before starting a new runtime.
-    for name in ["runtime", "ollama", "install"] {
-        process::reap_orphan(&state.engine_data_dir, name);
+    process::reap_orphan(&state.engine_data_dir, "runtime");
+    process::reap_orphan(&state.engine_data_dir, "ollama");
+    if process::reap_orphan(&state.engine_data_dir, "install") {
+        // A half-finished install leaves a virtualenv nobody should build on.
+        if let Ok(mut last_result) = state.last_install_result.lock() {
+            *last_result = Some(
+                "Un'installazione interrotta dalla sessione precedente è stata annullata: riavviala da Modelli."
+                    .to_string(),
+            );
+        }
     }
     let _ = spawn_runtime_process(state);
 }
@@ -404,6 +419,18 @@ fn log_tail(path: &Path, lines: usize) -> Option<String> {
 #[tauri::command]
 pub async fn start_engine_runtime(state: State<'_, AppState>) -> Result<RuntimeStatus, String> {
     spawn_runtime_process(state.inner())?;
+    // `spawn_runtime_process` returns Ok without starting anything when the
+    // port is already taken. If that listener is not ours, no amount of waiting
+    // will help, and blaming our own log would send the user down a dead end.
+    if !process_is_running(&state.runtime_process)
+        && loopback_runtime_available()
+        && !bridge_status().await.available
+    {
+        return Err(
+            "La porta 8787 è occupata da un altro programma. Chiudilo e riprova ad avviare i motori."
+                .to_string(),
+        );
+    }
 
     // Wait for the engine to actually answer instead of assuming it will: the
     // user is told the truth, and a runtime that dies on startup surfaces the
@@ -790,10 +817,14 @@ pub async fn get_bridge_status() -> BridgeStatus {
     bridge_status().await
 }
 
-/// How much history the activity view keeps in memory. The list is polled
-/// while jobs run, so an unbounded query would make every tick more expensive
-/// as the archive grows.
-const JOB_HISTORY_LIMIT: i64 = 200;
+/// How much history the activity view keeps in memory. The list is polled while
+/// jobs run, so an unbounded query would make every tick more expensive as the
+/// archive grows. It is never below `MAX_BATCH_FILES`, so the newest batch is
+/// always visible in full and the export count cannot be silently truncated.
+const JOB_HISTORY_LIMIT: i64 = 500;
+
+/// Largest batch a single run may contain.
+const MAX_BATCH_FILES: usize = 500;
 
 #[tauri::command]
 pub async fn list_jobs(state: State<'_, AppState>) -> Result<Vec<Job>, String> {
@@ -933,8 +964,8 @@ pub async fn start_jobs(
     if item_ids.is_empty() && quick_paths.is_empty() {
         return Err("Seleziona almeno un file".to_string());
     }
-    if item_ids.len().saturating_add(quick_paths.len()) > 500 {
-        return Err("Avvia al massimo 500 file per batch".to_string());
+    if item_ids.len().saturating_add(quick_paths.len()) > MAX_BATCH_FILES {
+        return Err(format!("Avvia al massimo {MAX_BATCH_FILES} file per batch"));
     }
     let mut bridge = bridge_status().await;
     if !bridge.available {
@@ -982,13 +1013,17 @@ pub async fn start_jobs(
     let batch_id = uuid::Uuid::new_v4().to_string();
     let specs: Vec<JobSpec> = items
         .into_iter()
-        .map(|(library_item_id, item)| JobSpec {
-            id: uuid::Uuid::new_v4().to_string(),
-            batch_id: batch_id.clone(),
-            library_item_id,
-            item,
-            options: options.clone(),
-            tool: tool.clone(),
+        .map(|(library_item_id, item)| {
+            let id = uuid::Uuid::new_v4().to_string();
+            JobSpec {
+                engine_job_id: id.clone(),
+                id,
+                batch_id: batch_id.clone(),
+                library_item_id,
+                item,
+                options: options.clone(),
+                tool: tool.clone(),
+            }
         })
         .collect();
     let specs_for_database = specs.clone();
@@ -1000,6 +1035,9 @@ pub async fn start_jobs(
     .map_err(|error| error.to_string())?
     .map_err(|error| error.to_string())?;
 
+    // Taken from what was inserted, not from a later read of the job list: a
+    // windowed query would quietly drop the tail of a large batch.
+    let job_ids: Vec<String> = specs.iter().map(|spec| spec.id.clone()).collect();
     for spec in specs {
         let cancellation = Arc::new(AtomicBool::new(false));
         state
@@ -1010,12 +1048,6 @@ pub async fn start_jobs(
         engine_bridge::spawn_job(state.inner().clone(), spec, cancellation);
     }
     let current = snapshot(state.database_path.clone(), state.data_dir.clone()).await?;
-    let job_ids = current
-        .jobs
-        .iter()
-        .filter(|job| job.batch_id.as_deref() == Some(&batch_id))
-        .map(|job| job.id.clone())
-        .collect();
     Ok(StartJobsReport {
         batch_id,
         job_ids,
@@ -1045,8 +1077,8 @@ fn engine_not_ready(bridge: &BridgeStatus, intent: &str) -> Option<String> {
         return None;
     }
     Some(format!(
-        "Il motore richiesto non è pronto ({}). Apri Modelli e completa l'installazione prima di avviare il batch.",
-        engine.label
+        "Il motore «{}» non è pronto: {}. Apri Modelli e completa l'installazione prima di avviare il batch.",
+        engine.id, engine.label
     ))
 }
 
@@ -1124,6 +1156,9 @@ pub async fn retry_job(job_id: String, state: State<'_, AppState>) -> Result<App
     };
     let spec = JobSpec {
         id: job.id.clone(),
+        // A fresh identity for this attempt: the engine may still be holding
+        // the previous one, and would refuse the retry as a duplicate.
+        engine_job_id: format!("{}-r{}", job.id, uuid::Uuid::new_v4().simple()),
         batch_id: job.batch_id.clone().unwrap_or_else(|| job.id.clone()),
         library_item_id: Some(library_item_id),
         item,
@@ -1535,6 +1570,7 @@ mod tests {
             .into_iter()
             .map(|id| JobSpec {
                 id: id.to_string(),
+                engine_job_id: id.to_string(),
                 batch_id: "batch-zip".to_string(),
                 library_item_id: Some(format!("item-{id}")),
                 item: LibraryItem {

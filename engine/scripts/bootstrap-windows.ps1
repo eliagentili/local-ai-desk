@@ -118,17 +118,22 @@ if (-not $OllamaWasRunning) {
     } catch {}
   }
 }
-Invoke-Native -Exe $OllamaBin -Arguments @("pull", "glm-ocr")
-Invoke-Native -Exe $OllamaBin -Arguments @("pull", "translategemma:12b")
-
-Write-Output "[6/6] Modelli documentali e audio"
-Push-Location $DataDir
+# Everything that needs the temporary Ollama runs inside this try, so a failed
+# pull cannot leave a stray `ollama serve` behind holding port 11434.
 try {
-  Invoke-Native -Exe $RuntimePython -Arguments @("-c", 'from faster_whisper import WhisperModel; WhisperModel("small", device="cpu", compute_type="int8", download_root="models/faster-whisper")')
-  $DoclingTools = Join-Path $DataDir ".venv\Scripts\docling-tools.exe"
-  Invoke-Native -Exe $DoclingTools -Arguments @("models", "download", "--output-dir", (Join-Path $DataDir "models\docling"))
+  Invoke-Native -Exe $OllamaBin -Arguments @("pull", "glm-ocr")
+  Invoke-Native -Exe $OllamaBin -Arguments @("pull", "translategemma:12b")
+
+  Write-Output "[6/6] Modelli documentali e audio"
+  Push-Location $DataDir
+  try {
+    Invoke-Native -Exe $RuntimePython -Arguments @("-c", 'from faster_whisper import WhisperModel; WhisperModel("small", device="cpu", compute_type="int8", download_root="models/faster-whisper")')
+    $DoclingTools = Join-Path $DataDir ".venv\Scripts\docling-tools.exe"
+    Invoke-Native -Exe $DoclingTools -Arguments @("models", "download", "--output-dir", (Join-Path $DataDir "models\docling"))
+  } finally {
+    Pop-Location
+  }
 } finally {
-  Pop-Location
   if ((-not $OllamaWasRunning) -and ($null -ne $OllamaProcess)) {
     Stop-Process -Id $OllamaProcess.Id -Force -ErrorAction SilentlyContinue
   }

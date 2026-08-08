@@ -35,6 +35,9 @@
   --surface-3: rgba(255, 255, 255, 0.62);
   --surface-4: rgba(255, 255, 255, 0.85);
   --topbar-bg: rgba(244, 240, 230, 0.78);
+  --panel-wash: linear-gradient(117deg, rgba(255, 255, 255, 0.74), rgba(247, 248, 224, 0.64));
+  --panel-wash-flat: rgba(255, 255, 255, 0.5);
+  --panel-wash-hover: rgba(255, 255, 255, 0.66);
 
   /* The sidebar is deliberately dark in both themes: it is the app's chrome,
      not a content surface, so it keeps its own scale. */
@@ -368,20 +371,6 @@ button {
   transform: translateY(-1px);
 }
 
-/* Pressing must feel like pressing: without an active state the control stays
-   lifted under the finger and the click reads as "nothing happened". */
-.button:active:not(:disabled),
-.intent-card:active,
-.quick-card:active,
-.hero-drop-zone:active,
-.studio-drop-zone:active,
-.nav-item:active,
-.row-action:active:not(:disabled),
-.icon-button:active,
-.text-button:active {
-  transform: translateY(0) scale(0.985);
-  transition-duration: 60ms;
-}
 
 .button:disabled {
   opacity: 0.55;
@@ -450,9 +439,7 @@ button {
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 24px;
-  background:
-    linear-gradient(117deg, rgba(255, 255, 255, 0.74), rgba(247, 248, 224, 0.64)),
-    var(--paper);
+  background: var(--panel-wash), var(--paper);
   box-shadow: var(--shadow);
 }
 
@@ -2470,6 +2457,21 @@ tbody tr:last-child td {
   }
 }
 
+/* Pressing must feel like pressing: without an active state the control stays
+   lifted under the finger and the click reads as "nothing happened". */
+.button:active:not(:disabled),
+.intent-card:active,
+.quick-card:active,
+.hero-drop-zone:active,
+.studio-drop-zone:active,
+.nav-item:active,
+.row-action:active:not(:disabled),
+.icon-button:active,
+.text-button:active {
+  transform: translateY(0) scale(0.985);
+  transition-duration: 60ms;
+}
+
 /* ---------------------------------------------------------------- additions */
 
 .skip-link {
@@ -2493,20 +2495,12 @@ tbody tr:last-child td {
   transform: translateY(0);
 }
 
-/* The toast stays mounted so its live region is announced; visibility is what
-   changes, and the panel never blocks clicks in the corner it occupies. */
+/* The toast stays mounted so its live region is announced. `visibility: hidden`
+   would take it back out of the accessibility tree, defeating that, so the
+   hidden state is opacity-only and stops intercepting clicks instead. */
 .toast[data-visible="false"] {
-  visibility: hidden;
   opacity: 0;
-}
-
-.toast {
   pointer-events: none;
-}
-
-.toast > div,
-.toast > button {
-  pointer-events: auto;
 }
 
 .toast-reasons {
@@ -2848,6 +2842,9 @@ tbody tr:last-child td {
     --surface-3: rgba(255, 255, 255, 0.07);
     --surface-4: rgba(255, 255, 255, 0.1);
     --topbar-bg: rgba(16, 26, 29, 0.82);
+    --panel-wash: linear-gradient(117deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02));
+    --panel-wash-flat: rgba(255, 255, 255, 0.05);
+    --panel-wash-hover: rgba(255, 255, 255, 0.09);
 
     --sidebar-bg: #081114;
     --sidebar-line: rgba(255, 255, 255, 0.08);

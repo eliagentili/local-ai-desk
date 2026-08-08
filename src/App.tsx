@@ -95,6 +95,7 @@ function App() {
   const [quickItems, setQuickItems] = useState<LibraryItem[]>([]);
   const [dropActive, setDropActive] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [runtimeBusy, setRuntimeBusy] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
   const inspectingRef = useRef(false);
 
@@ -449,7 +450,9 @@ function App() {
   }
 
   async function handleRuntimeAction() {
+    if (runtimeBusy) return;
     const starting = runtime.installed;
+    setRuntimeBusy(true);
     try {
       const next = await invoke<RuntimeStatus>(
         starting ? "start_engine_runtime" : "install_engine_runtime",
@@ -466,10 +469,14 @@ function App() {
       });
     } catch (error) {
       setNotice({ tone: "error", title: "Motori non disponibili", detail: describeError(error) });
+    } finally {
+      setRuntimeBusy(false);
     }
   }
 
   async function handleStopRuntime() {
+    if (runtimeBusy) return;
+    setRuntimeBusy(true);
     try {
       const next = await invoke<RuntimeStatus>("stop_engine_runtime");
       setRuntime(next);
@@ -480,6 +487,8 @@ function App() {
       });
     } catch (error) {
       setNotice({ tone: "error", title: "Motori ancora attivi", detail: describeError(error) });
+    } finally {
+      setRuntimeBusy(false);
     }
   }
 
@@ -555,6 +564,7 @@ function App() {
       return (
         <ModelsView
           bridge={snapshot.bridge}
+          busy={runtimeBusy}
           hasActiveJobs={hasActiveJobs}
           onOpenLog={(path) => void handleRevealPath(path)}
           onRuntimeAction={() => void handleRuntimeAction()}
@@ -656,8 +666,13 @@ function App() {
           </div>
         </div>
       ) : null}
+      {/* Two regions, not one: sharing a node made every file drop re-announce
+          the job tally, because the text changed for an unrelated reason. */}
       <span aria-live="polite" className="sr-only" role="status">
-        {inspecting ? "Lettura dei file in corso" : jobAnnouncement}
+        {inspecting ? "Lettura dei file in corso" : ""}
+      </span>
+      <span aria-live="polite" className="sr-only" role="status">
+        {jobAnnouncement}
       </span>
     </div>
   );

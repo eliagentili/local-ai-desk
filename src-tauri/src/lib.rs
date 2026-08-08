@@ -39,6 +39,17 @@ fn sweep_partial_results(results_dir: &Path) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let application = tauri::Builder::default()
+        // Registered first, so a second launch never reaches `setup`. Two
+        // instances would otherwise share one SQLite file, one engine port and
+        // one set of engine processes, and each would try to clean up the
+        // other's runtime as if it were an orphan.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())

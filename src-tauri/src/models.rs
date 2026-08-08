@@ -148,6 +148,13 @@ impl Default for WorkflowOptions {
 #[derive(Debug, Clone)]
 pub struct JobSpec {
     pub id: String,
+    /// Identity used with the engine for this attempt.
+    ///
+    /// A retry reuses `id` so the timeline keeps one row per source, but the
+    /// engine refuses to register a job id it is still holding. Giving each
+    /// attempt its own id keeps the retry from colliding with the run it
+    /// replaces.
+    pub engine_job_id: String,
     pub batch_id: String,
     pub library_item_id: Option<String>,
     pub item: LibraryItem,

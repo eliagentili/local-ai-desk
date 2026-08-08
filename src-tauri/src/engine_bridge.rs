@@ -236,6 +236,19 @@ pub(crate) fn safe_filename(name: &str, fallback: &str) -> String {
     trimmed.to_string()
 }
 
+/// Working name for a result still being written.
+///
+/// Fixed length on purpose: deriving it from the output name pushed long
+/// filenames past the filesystem limit, so a result the engine could name was
+/// one this could not create. The dot prefix and `.partial` suffix are what the
+/// startup sweep looks for.
+fn partial_name() -> String {
+    format!(
+        ".{}.partial",
+        &uuid::Uuid::new_v4().simple().to_string()[..12]
+    )
+}
+
 fn translation_fallback_name(spec: &JobSpec) -> String {
     let stem = Path::new(&spec.item.name)
         .file_stem()
@@ -282,14 +295,14 @@ fn build_url(spec: &JobSpec) -> Result<Url, RunError> {
             .append_pair("target_language", &spec.options.target_language)
             .append_pair("mode", &spec.options.translation_mode)
             .append_pair("filename", &spec.item.name)
-            .append_pair("job_id", &spec.id);
+            .append_pair("job_id", &spec.engine_job_id);
     } else {
         url.query_pairs_mut()
             .append_pair("tool", &spec.tool)
             .append_pair("output_format", &spec.options.output_format)
             .append_pair("language", &spec.options.language)
             .append_pair("filename", &spec.item.name)
-            .append_pair("job_id", &spec.id);
+            .append_pair("job_id", &spec.engine_job_id);
     }
     Ok(url)
 }
@@ -317,9 +330,10 @@ async fn poll_translation_progress(
         "uploading" => "uploading",
         "preparing" => "preparing",
         "completed" => "finalizing",
-        "cancelling" => "cancelling",
-        "cancelled" => "cancelled",
-        "error" => "failed",
+        "cancelling" | "cancelled" => "cancelling",
+        // Never terminal here: `mark_failed` closes the job with the actual
+        // reason, and a terminal status set from a poll would lock it out.
+        "error" => "finalizing",
         _ => "running",
     }
     .to_string();
@@ -398,7 +412,7 @@ async fn write_translation_result(
     let job_dir = state.results_dir.join(&spec.id);
     fs::create_dir_all(&job_dir).await?;
     let output_path = job_dir.join(&output_name);
-    let partial_path = job_dir.join(format!(".{output_name}.partial"));
+    let partial_path = job_dir.join(partial_name());
     let mut destination = File::create(&partial_path).await?;
     let outcome: Result<(), RunError> = async {
         let mut stream = response.bytes_stream();
@@ -414,13 +428,15 @@ async fn write_translation_result(
     .await;
     drop(destination);
 
-    // Cancellation, a full disk and a failed rename all converge here, so a
-    // half-written PDF is never left behind under any of them.
-    let outcome = outcome.and(
-        fs::rename(&partial_path, &output_path)
+    // Promote the partial file only once it is complete: renaming after a
+    // cancellation would publish a truncated PDF under the final name. A full
+    // disk and a failed rename converge on the same cleanup.
+    let outcome = match outcome {
+        Ok(()) => fs::rename(&partial_path, &output_path)
             .await
             .map_err(RunError::from),
-    );
+        Err(error) => Err(error),
+    };
     if let Err(error) = outcome {
         let _ = fs::remove_file(&partial_path).await;
         let _ = fs::remove_dir(&job_dir).await;
@@ -483,7 +499,7 @@ async fn write_text_result(
     }
     // Write, then rename: a reader never sees a partially written result, which
     // is what "risultato atomico" claims for every format, not only for PDF.
-    let partial_path = job_dir.join(format!(".{output_name}.partial"));
+    let partial_path = job_dir.join(partial_name());
     let written = async {
         fs::write(&partial_path, payload.output.unwrap_or_default()).await?;
         fs::rename(&partial_path, &output_path).await
@@ -604,7 +620,7 @@ async fn execute_inner(
                         state.database_path.clone(), spec.id.clone(),
                         OwnedProgress::stage("cancelling", 0.0, "Interruzione del motore"),
                     ).await;
-                    cancel_remote(&client, &spec.id).await;
+                    cancel_remote(&client, &spec.engine_job_id).await;
                     drop(permit);
                     return Err(RunError::Cancelled);
                 }
@@ -631,7 +647,7 @@ async fn execute_inner(
                     }
                 } else if translation {
                     if let Some((status, progress, stage, current, total, part, parts)) =
-                        poll_translation_progress(&client, &spec.id).await
+                        poll_translation_progress(&client, &spec.engine_job_id).await
                     {
                         let signature = format!("{status}-{progress:.1}-{stage}-{current}-{part}");
                         if signature != last_signature {
@@ -667,7 +683,7 @@ async fn execute_inner(
     };
 
     if is_cancelled(cancel) {
-        cancel_remote(&client, &spec.id).await;
+        cancel_remote(&client, &spec.engine_job_id).await;
         return Err(RunError::Cancelled);
     }
     if !response.status().is_success() {
@@ -791,6 +807,7 @@ mod tests {
         .expect("library item");
         let spec = JobSpec {
             id: "cancel-job".to_string(),
+            engine_job_id: "cancel-job".to_string(),
             batch_id: "cancel-batch".to_string(),
             library_item_id: Some("cancel-item".to_string()),
             item: database::list_library(&database_path)
@@ -872,6 +889,7 @@ mod tests {
 
         let spec = JobSpec {
             id: "bridge-job".to_string(),
+            engine_job_id: "bridge-job".to_string(),
             batch_id: "bridge-batch".to_string(),
             library_item_id: Some("bridge-item".to_string()),
             item: LibraryItem {

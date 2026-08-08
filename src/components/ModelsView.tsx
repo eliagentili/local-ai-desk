@@ -14,6 +14,7 @@ import type { BridgeStatus, RuntimeStatus, SystemSnapshot } from "../types";
 
 interface ModelsViewProps {
   bridge: BridgeStatus;
+  busy: boolean;
   hasActiveJobs: boolean;
   runtime: RuntimeStatus;
   system: SystemSnapshot;
@@ -24,6 +25,7 @@ interface ModelsViewProps {
 
 export function ModelsView({
   bridge,
+  busy,
   hasActiveJobs,
   runtime,
   system,
@@ -94,7 +96,7 @@ export function ModelsView({
         {bridge.available ? (
           <button
             className="button button-secondary"
-            disabled={hasActiveJobs}
+            disabled={busy || hasActiveJobs}
             onClick={onStopRuntime}
             title={hasActiveJobs ? "Attendi la fine dei lavori attivi" : undefined}
             type="button"
@@ -104,12 +106,14 @@ export function ModelsView({
         ) : (
           <button
             className="button button-primary"
-            disabled={!runtime.supported || runtime.installing}
+            disabled={!runtime.supported || runtime.installing || busy}
             onClick={onRuntimeAction}
             type="button"
           >
             {runtime.installing ? (
               <><LoaderCircle className="spin" size={16} /> Installazione in corso</>
+            ) : busy ? (
+              <><LoaderCircle className="spin" size={16} /> Avvio in corso…</>
             ) : runtime.installed ? (
               <><Play size={16} /> Avvia motori</>
             ) : (
