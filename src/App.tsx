@@ -2,7 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { AlertCircle, CheckCircle2, FileUp, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import "./App.css";
 import { ActivityView } from "./components/ActivityView";
@@ -16,6 +16,7 @@ import { StudioView } from "./components/StudioView";
 import { Topbar } from "./components/Topbar";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { useAppUpdater } from "./hooks/useAppUpdater";
+import { describeError } from "./lib/errors";
 import type {
   AppSnapshot,
   BridgeStatus,
@@ -71,6 +72,9 @@ const emptyRuntime: RuntimeStatus = {
   installing: false,
   dataDirectory: "—",
   logPath: "—",
+  runtimeLogPath: "—",
+  modelsDirectory: "—",
+  modelsServerExposed: false,
   message: "Verifica del runtime…",
 };
 
@@ -78,6 +82,9 @@ interface Notice {
   tone: "success" | "error";
   title: string;
   detail: string;
+  /** Per-file reasons the backend computed. Dropping them left the user with a
+   *  count and no way to know which file failed or why. */
+  reasons?: string[];
 }
 
 function App() {
@@ -90,6 +97,7 @@ function App() {
   const [quickItems, setQuickItems] = useState<LibraryItem[]>([]);
   const [dropActive, setDropActive] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [runtimeBusy, setRuntimeBusy] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
   const inspectingRef = useRef(false);
 
@@ -112,9 +120,10 @@ function App() {
         detail: `${report.files.length} ${report.files.length === 1 ? "file temporaneo" : "file temporanei"}${
           report.rejected.length ? ` · ${report.rejected.length} non accettati` : " · pulizia automatica dopo il lavoro"
         }`,
+        reasons: report.rejected,
       });
     } catch (error) {
-      setNotice({ tone: "error", title: "File non disponibili", detail: String(error) });
+      setNotice({ tone: "error", title: "File non disponibili", detail: describeError(error) });
     } finally {
       inspectingRef.current = false;
       setInspecting(false);
@@ -151,7 +160,7 @@ function App() {
           setNotice({
             tone: "error",
             title: "Avvio incompleto",
-            detail: String(error),
+            detail: describeError(error),
           });
         }
       } finally {
@@ -212,7 +221,34 @@ function App() {
     };
   }, []);
 
+  // A toast that never leaves covers the corner of the window for the rest of
+  // the session; errors linger longer than confirmations because they are read.
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(
+      () => setNotice(null),
+      notice.tone === "error" ? 12_000 : 6_000,
+    );
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
   const hasActiveJobs = snapshot.jobs.some((job) => activeJobStates.has(job.status));
+
+  // The end of a job is the moment that matters most and it happens off-screen
+  // whenever the user is not on Attività. Announcing the tally — rather than
+  // every tick — keeps the region useful instead of chatty.
+  const jobAnnouncement = useMemo(() => {
+    if (hasActiveJobs) return "";
+    const completed = snapshot.jobs.filter((job) => job.status === "completed").length;
+    const failed = snapshot.jobs.filter((job) => job.status === "failed").length;
+    if (!completed && !failed) return "";
+    const parts = [
+      completed ? `${completed} ${completed === 1 ? "lavoro completato" : "lavori completati"}` : null,
+      failed ? `${failed} non ${failed === 1 ? "riuscito" : "riusciti"}` : null,
+    ].filter(Boolean);
+    return `Coda vuota. ${parts.join(", ")}.`;
+  }, [hasActiveJobs, snapshot.jobs]);
+
   const updater = useAppUpdater(hasActiveJobs);
   const showUpdateBanner =
     !updater.dismissed &&
@@ -260,13 +296,14 @@ function App() {
         tone: report.rejected.length ? "error" : "success",
         title: report.rejected.length ? "Importazione parziale" : "Importazione completata",
         detail: details.join(" · "),
+        reasons: report.rejected,
       });
       if (report.imported > 0) setActive("library");
     } catch (error) {
       setNotice({
         tone: "error",
         title: "Importazione non riuscita",
-        detail: String(error),
+        detail: describeError(error),
       });
     } finally {
       setImporting(false);
@@ -284,7 +321,7 @@ function App() {
       const paths = typeof selection === "string" ? [selection] : selection ?? [];
       await addQuickPaths(paths);
     } catch (error) {
-      setNotice({ tone: "error", title: "Selezione non riuscita", detail: String(error) });
+      setNotice({ tone: "error", title: "Selezione non riuscita", detail: describeError(error) });
     }
   }
 
@@ -322,7 +359,7 @@ function App() {
       });
       setActive("activity");
     } catch (error) {
-      setNotice({ tone: "error", title: "Avvio non riuscito", detail: String(error) });
+      setNotice({ tone: "error", title: "Avvio non riuscito", detail: describeError(error) });
     } finally {
       setStarting(false);
     }
@@ -338,7 +375,7 @@ function App() {
         detail: "Il riferimento è stato eliminato. Il file originale e i risultati restano intatti.",
       });
     } catch (error) {
-      setNotice({ tone: "error", title: "Rimozione non riuscita", detail: String(error) });
+      setNotice({ tone: "error", title: "Rimozione non riuscita", detail: describeError(error) });
     }
   }
 
@@ -352,7 +389,7 @@ function App() {
       await invoke<boolean>("cancel_job", { jobId });
       await refreshJobs();
     } catch (error) {
-      setNotice({ tone: "error", title: "Annullamento non riuscito", detail: String(error) });
+      setNotice({ tone: "error", title: "Annullamento non riuscito", detail: describeError(error) });
     }
   }
 
@@ -366,7 +403,30 @@ function App() {
         detail: `${count} ${count === 1 ? "lavoro attivo" : "lavori attivi"}`,
       });
     } catch (error) {
-      setNotice({ tone: "error", title: "Annullamento non riuscito", detail: String(error) });
+      setNotice({ tone: "error", title: "Annullamento non riuscito", detail: describeError(error) });
+    }
+  }
+
+  async function handleRetry(jobId: string) {
+    try {
+      const current = await invoke<AppSnapshot>("retry_job", { jobId });
+      setSnapshot(current);
+      setNotice({
+        tone: "success",
+        title: "Lavoro rimesso in coda",
+        detail: "Riparte con le stesse impostazioni.",
+      });
+      setActive("activity");
+    } catch (error) {
+      setNotice({ tone: "error", title: "Impossibile riprovare", detail: describeError(error) });
+    }
+  }
+
+  async function handleRevealPath(path: string) {
+    try {
+      await invoke("reveal_path", { path });
+    } catch (error) {
+      setNotice({ tone: "error", title: "Log non disponibile", detail: describeError(error) });
     }
   }
 
@@ -379,7 +439,7 @@ function App() {
         detail: `${report.filename} · ${report.fileCount} risultati`,
       });
     } catch (error) {
-      setNotice({ tone: "error", title: "Esportazione non riuscita", detail: String(error) });
+      setNotice({ tone: "error", title: "Esportazione non riuscita", detail: describeError(error) });
     }
   }
 
@@ -387,26 +447,72 @@ function App() {
     try {
       await invoke("reveal_job_result", { jobId });
     } catch (error) {
-      setNotice({ tone: "error", title: "Risultato non disponibile", detail: String(error) });
+      setNotice({ tone: "error", title: "Risultato non disponibile", detail: describeError(error) });
     }
   }
 
   async function handleRuntimeAction() {
+    if (runtimeBusy) return;
+    const starting = runtime.installed;
+    setRuntimeBusy(true);
     try {
-      const command = runtime.installed ? "start_engine_runtime" : "install_engine_runtime";
-      const next = await invoke<RuntimeStatus>(command);
+      const next = await invoke<RuntimeStatus>(
+        starting ? "start_engine_runtime" : "install_engine_runtime",
+      );
+      setRuntime(next);
+      // `start_engine_runtime` only resolves once the engine answers, so the
+      // tone is derived from the returned state rather than assumed.
+      setNotice({
+        tone: starting && !next.running ? "error" : "success",
+        title: starting ? (next.running ? "Motori avviati" : "Avvio non riuscito") : "Installazione avviata",
+        detail: starting
+          ? next.message
+          : "Il download prosegue in background; puoi seguirlo in Modelli.",
+      });
+    } catch (error) {
+      setNotice({ tone: "error", title: "Motori non disponibili", detail: describeError(error) });
+    } finally {
+      setRuntimeBusy(false);
+    }
+  }
+
+  async function handleStopRuntime() {
+    if (runtimeBusy) return;
+    setRuntimeBusy(true);
+    try {
+      const next = await invoke<RuntimeStatus>("stop_engine_runtime");
       setRuntime(next);
       setNotice({
         tone: "success",
-        title: runtime.installed ? "Avvio richiesto" : "Installazione avviata",
-        detail: runtime.installed
-          ? "I motori saranno disponibili tra pochi secondi."
-          : "Il download prosegue in background; puoi seguirlo nella schermata Motori.",
+        title: "Motori fermati",
+        detail: "Puoi riavviarli quando vuoi da Modelli.",
       });
     } catch (error) {
-      setNotice({ tone: "error", title: "Runtime non disponibile", detail: String(error) });
+      setNotice({ tone: "error", title: "Motori ancora attivi", detail: describeError(error) });
+    } finally {
+      setRuntimeBusy(false);
     }
   }
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setNotice(null);
+        return;
+      }
+      const accel = event.metaKey || event.ctrlKey;
+      if (!accel || event.altKey) return;
+      if (event.key === "o" || event.key === "O") {
+        event.preventDefault();
+        void (event.shiftKey ? handleImport() : handleQuickPick());
+      } else if (event.key === ",") {
+        event.preventDefault();
+        setActive("settings");
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
 
   function renderView() {
     if (active === "home") {
@@ -451,6 +557,7 @@ function App() {
           onCancel={(jobId) => void handleCancel(jobId)}
           onCancelAll={() => void handleCancelAll()}
           onExport={(jobIds) => void handleExport(jobIds)}
+          onRetry={(jobId) => void handleRetry(jobId)}
           onReveal={(jobId) => void handleReveal(jobId)}
         />
       );
@@ -459,7 +566,11 @@ function App() {
       return (
         <ModelsView
           bridge={snapshot.bridge}
+          busy={runtimeBusy}
+          hasActiveJobs={hasActiveJobs}
+          onOpenLog={(path) => void handleRevealPath(path)}
           onRuntimeAction={() => void handleRuntimeAction()}
+          onStopRuntime={() => void handleStopRuntime()}
           runtime={runtime}
           system={snapshot.system}
         />
@@ -475,6 +586,9 @@ function App() {
 
   return (
     <div className="app-shell">
+      <a className="skip-link" href="#main-content">
+        Vai al contenuto
+      </a>
       <Sidebar
         active={active}
         appVersion={updater.currentVersion}
@@ -490,7 +604,7 @@ function App() {
           onOpenUpdates={() => setActive("settings")}
           updater={updater}
         />
-        <main className="main-content" aria-busy={loading}>
+        <main aria-busy={loading} className="main-content" id="main-content" tabIndex={-1}>
           {loading ? (
             <div className="loading-state" role="status">
               <span className="loading-mark">L/AI</span>
@@ -502,22 +616,42 @@ function App() {
         </main>
       </div>
 
-      {notice ? (
-        <div className={`toast${showUpdateBanner ? " toast-raised" : ""}`} data-tone={notice.tone} role="status">
-          {notice.tone === "success" ? (
-            <CheckCircle2 size={19} />
-          ) : (
-            <AlertCircle size={19} />
-          )}
-          <div>
-            <strong>{notice.title}</strong>
-            <span>{notice.detail}</span>
-          </div>
-          <button aria-label="Chiudi messaggio" onClick={() => setNotice(null)} type="button">
-            <X size={16} />
-          </button>
-        </div>
-      ) : null}
+      {/* Mounted unconditionally: a live region inserted together with its text
+          is not announced, because assistive technology never saw it empty. */}
+      <div
+        aria-live="polite"
+        className={`toast${showUpdateBanner ? " toast-raised" : ""}`}
+        data-tone={notice?.tone}
+        data-visible={Boolean(notice)}
+        role="status"
+      >
+        {notice ? (
+          <>
+            {notice.tone === "success" ? (
+              <CheckCircle2 size={19} />
+            ) : (
+              <AlertCircle size={19} />
+            )}
+            <div>
+              <strong>{notice.title}</strong>
+              <span>{notice.detail}</span>
+              {notice.reasons?.length ? (
+                <ul className="toast-reasons">
+                  {notice.reasons.slice(0, 4).map((reason) => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                  {notice.reasons.length > 4 ? (
+                    <li>e altri {notice.reasons.length - 4}</li>
+                  ) : null}
+                </ul>
+              ) : null}
+            </div>
+            <button aria-label="Chiudi messaggio" onClick={() => setNotice(null)} type="button">
+              <X size={16} />
+            </button>
+          </>
+        ) : null}
+      </div>
       {showUpdateBanner ? (
         <UpdateBanner
           hasActiveJobs={hasActiveJobs}
@@ -534,7 +668,14 @@ function App() {
           </div>
         </div>
       ) : null}
-      {inspecting ? <span className="sr-only" role="status">Lettura dei file…</span> : null}
+      {/* Two regions, not one: sharing a node made every file drop re-announce
+          the job tally, because the text changed for an unrelated reason. */}
+      <span aria-live="polite" className="sr-only" role="status">
+        {inspecting ? "Lettura dei file in corso" : ""}
+      </span>
+      <span aria-live="polite" className="sr-only" role="status">
+        {jobAnnouncement}
+      </span>
     </div>
   );
 }

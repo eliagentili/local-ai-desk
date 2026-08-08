@@ -43,6 +43,8 @@ export interface Job {
   outputMime: string | null;
   engine: string | null;
   elapsedSeconds: number | null;
+  /** Quality caveats reported by the engine on an otherwise successful run. */
+  warnings: string[];
   error: string | null;
   createdAt: string;
   updatedAt: string;
@@ -84,6 +86,9 @@ export interface RuntimeStatus {
   installing: boolean;
   dataDirectory: string;
   logPath: string;
+  runtimeLogPath: string;
+  modelsDirectory: string;
+  modelsServerExposed: boolean;
   message: string;
 }
 

@@ -94,8 +94,28 @@ if [[ ! -x "$ollama_bin" ]]; then
   verify_sha256 "$ollama_archive" "$ollama_sha256"
   ditto -x -k "$ollama_archive" "$ollama_dir"
 fi
-export OLLAMA_MODELS="$data_dir/models/ollama"
+# Share Ollama's conventional per-user store instead of keeping a private copy
+# inside the app container. These are official registry models of several GB: a
+# machine that already has them must never download a second copy, and one that
+# does not ends up with them where Ollama itself would have put them.
+export OLLAMA_MODELS="${OLLAMA_MODELS:-$HOME/.ollama/models}"
 mkdir -p "$OLLAMA_MODELS"
+
+# An earlier version kept its own store; move it rather than re-downloading.
+legacy_models="$data_dir/models/ollama"
+if [[ -d "$legacy_models/blobs" && ! -d "$OLLAMA_MODELS/blobs" ]]; then
+  echo "Riuso i modelli gia' scaricati"
+  mv "$legacy_models"/* "$OLLAMA_MODELS"/ 2>/dev/null || true
+fi
+
+ensure_model() {
+  # `show` succeeds only when the model is already present locally.
+  if "$ollama_bin" show "$1" >/dev/null 2>&1; then
+    echo "Modello gia' presente: $1"
+  else
+    "$ollama_bin" pull "$1"
+  fi
+}
 if ! curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
   "$ollama_bin" serve >> "$data_dir/ollama-install.log" 2>&1 &
   ollama_pid=$!
@@ -105,8 +125,8 @@ if ! curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
     sleep 1
   done
 fi
-"$ollama_bin" pull glm-ocr
-"$ollama_bin" pull translategemma:12b
+ensure_model glm-ocr
+ensure_model translategemma:12b
 
 echo "[6/6] Modelli documentali e audio"
 cd "$data_dir"

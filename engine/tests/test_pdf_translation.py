@@ -95,7 +95,7 @@ class PDFTranslationCommandTests(unittest.TestCase):
         self.assertEqual(progress[0]["progress"], 4.0)
         self.assertEqual(progress[-1]["progress"], 100.0)
 
-    def test_cancellation_terminates_the_whole_translation_process_group(self):
+    def test_cancellation_terminates_the_translation_worker(self):
         process = FakeActiveProcess()
         tags = {"models": [{"name": "translategemma:12b"}]}
 
@@ -114,8 +114,7 @@ class PDFTranslationCommandTests(unittest.TestCase):
                 patch.object(engines, "find_binary", return_value=str(fake_cli)),
                 patch.object(engines, "PDF_TRANSLATION_WORKER", fake_worker),
                 patch.object(engines, "_ollama_request", return_value=tags),
-                patch.object(engines.subprocess, "Popen", return_value=process),
-                patch.object(engines.os, "killpg", create=True) as kill_group,
+                patch.object(engines.subprocess, "Popen", return_value=process) as popen,
             ):
                 with self.assertRaises(engines.ProcessingCancelled):
                     engines.translate_pdf(
@@ -127,11 +126,20 @@ class PDFTranslationCommandTests(unittest.TestCase):
                         CancelOnWait(),
                     )
 
+        # The worker is signalled directly rather than by process group: on
+        # POSIX it deliberately shares this server's group, so that the desktop
+        # app can terminate the whole tree on quit. Signalling the group from
+        # here would take the server down with it.
+        self.assertEqual(process.returncode, -15)
+        options = popen.call_args.kwargs
         if os.name == "nt":
-            kill_group.assert_not_called()
-            self.assertEqual(process.returncode, -15)
+            self.assertIn("creationflags", options)
         else:
-            kill_group.assert_called_once_with(process.pid, engines.signal.SIGTERM)
+            self.assertNotIn(
+                "start_new_session",
+                options,
+                "a detached session would survive the app being closed",
+            )
 
 
 if __name__ == "__main__":

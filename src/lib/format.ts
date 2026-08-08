@@ -10,15 +10,34 @@ export function formatBytes(bytes: number): string {
   return `${value.toFixed(digits)} ${units[index]}`;
 }
 
+// Constructing an Intl formatter is expensive and the activity list calls this
+// once per row on every poll, so the instances are built once and reused.
+const shortDate = new Intl.DateTimeFormat("it-IT", {
+  day: "2-digit",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+const longDate = new Intl.DateTimeFormat("it-IT", {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
 export function formatDate(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
-  return new Intl.DateTimeFormat("it-IT", {
-    day: "2-digit",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
+  return shortDate.format(date);
+}
+
+export function formatDateTime(value: string | null): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return longDate.format(date);
 }
 
 export function engineName(id: string): string {

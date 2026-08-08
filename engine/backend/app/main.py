@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import hmac
 import os
 import re
 import shutil
 import signal
+import subprocess
 import tempfile
 import threading
 import time
@@ -11,10 +14,9 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
-from starlette.responses import FileResponse
+from starlette.responses import FileResponse, JSONResponse
 from starlette.requests import ClientDisconnect
 
 from .config import JOBS_DIR, MAX_FILE_BYTES, WORK_DIR
@@ -34,22 +36,35 @@ app = FastAPI(
     version="1.2.0",
     description="Backend locale per sei motori AI.",
 )
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3010",
-        "http://127.0.0.1:3010",
-    ],
-    allow_credentials=False,
-    allow_methods=["GET", "POST"],
-    allow_headers=["*"],
-    expose_headers=[
-        "Content-Disposition",
-        "X-Local-Engine",
-        "X-Elapsed-Seconds",
-        "X-Translation-Mode",
-    ],
-)
+
+# The engine listens on the loopback interface, which every other program on the
+# machine can reach — including a web page the user happens to have open. Only
+# the desktop app knows the token handed over at spawn time, and a browser
+# cannot attach that header cross-origin without a preflight we always refuse.
+ENGINE_TOKEN = os.getenv("LOCAL_AI_ENGINE_TOKEN", "")
+
+
+@app.middleware("http")
+async def require_local_caller(request: Request, call_next):
+    if request.url.path.startswith("/api/"):
+        if not ENGINE_TOKEN:
+            return JSONResponse(
+                {"detail": "Motore avviato senza token locale: riavvia Local AI Desk."},
+                status_code=503,
+            )
+        # The native client never sets Origin; a browser always does.
+        if request.headers.get("origin"):
+            return JSONResponse(
+                {"detail": "Richieste dal browser non ammesse."}, status_code=403
+            )
+        presented = request.headers.get("x-local-token", "")
+        # compare_digest rejects non-ASCII str operands with TypeError, which
+        # would answer a malformed header with a 500 and a traceback.
+        if not hmac.compare_digest(
+            presented.encode("utf-8", "replace"), ENGINE_TOKEN.encode("utf-8")
+        ):
+            return JSONResponse({"detail": "Token locale non valido."}, status_code=401)
+    return await call_next(request)
 
 ALLOWED_TOOLS = {
     "auto",
@@ -233,6 +248,16 @@ def job_status(job_id: str, response: Response):
     return snapshot
 
 
+async def _heartbeat(job_id: str, interval: float = 5.0) -> None:
+    """Keep `updated_at` fresh while a long engine call is in flight."""
+    try:
+        while True:
+            await asyncio.sleep(interval)
+            update_job_progress(job_id, state="running")
+    except asyncio.CancelledError:
+        return
+
+
 def raise_if_cancelled(cancel_event: threading.Event) -> None:
     if cancel_event.is_set():
         raise ProcessingCancelled("Elaborazione annullata dall’utente.")
@@ -285,8 +310,163 @@ def cancel_job(job_id: str):
     return {"job_id": job_id, "cancelled": event is not None}
 
 
+# The desktop app terminates the engines when it quits normally. A crash, a
+# Force Quit or a `kill -9` skips that, and the engines — with the models they
+# hold in memory — would then run on the user's machine indefinitely. So the
+# engine also watches the app: if the process that started it is gone, it shuts
+# itself down and takes what it owns with it.
+APP_PID = int(os.getenv("LOCAL_AI_APP_PID", "0") or 0)
+OLLAMA_PID = int(os.getenv("LOCAL_AI_OLLAMA_PID", "0") or 0)
+_SUPERVISOR_INTERVAL_SECONDS = 5.0
+
+
+def process_is_alive(pid: int) -> bool:
+    if pid <= 1:
+        return False
+    if os.name == "nt":
+        # `os.kill` on Windows terminates rather than probes, so the liveness
+        # check has to go through the API directly.
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Owned by another user: it exists, which is all we asked.
+        return True
+    return True
+
+
+def stop_owned_ollama() -> None:
+    """Stop the model server, but only the instance the app started itself."""
+    if not OLLAMA_PID or not process_is_alive(OLLAMA_PID):
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(OLLAMA_PID), "/T", "/F"],
+            check=False,
+            capture_output=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return
+    try:
+        os.kill(OLLAMA_PID, signal.SIGTERM)
+    except OSError:
+        return
+    for _ in range(30):
+        if not process_is_alive(OLLAMA_PID):
+            return
+        time.sleep(0.1)
+    try:
+        os.kill(OLLAMA_PID, signal.SIGKILL)
+    except OSError:
+        pass
+
+
+def shutdown_orphaned_engine() -> None:
+    with _JOB_LOCK:
+        events = list(_JOB_EVENTS.values())
+    for event in events:
+        event.set()
+    cancel_all_translation_processes()
+    stop_owned_ollama()
+    sweep_orphan_jobs()
+    # Hard exit on purpose: a graceful uvicorn shutdown waits for in-flight
+    # requests, and the client that would have closed them no longer exists.
+    os._exit(0)
+
+
+def parent_is_gone() -> bool:
+    """Has the desktop app that spawned this engine disappeared?
+
+    On POSIX the answer is immediate and unambiguous: the engine is a direct
+    child of the app, so when the app dies the kernel re-parents the engine to
+    init. Comparing the current parent against the expected one therefore beats
+    probing the pid, which can still succeed while the app is a zombie and can
+    be misled by pid reuse. Windows has no such relationship, so there the
+    process handle is queried instead.
+    """
+    if os.name != "nt" and os.getppid() != APP_PID:
+        return True
+    return not process_is_alive(APP_PID)
+
+
+async def _supervise_parent() -> None:
+    if not APP_PID:
+        # Started by hand, e.g. for development: nobody to outlive.
+        return
+    while True:
+        await asyncio.sleep(_SUPERVISOR_INTERVAL_SECONDS)
+        if parent_is_gone():
+            shutdown_orphaned_engine()
+
+
+def sweep_orphan_jobs() -> None:
+    """Remove working copies left behind by a previous run.
+
+    Uploads are streamed into per-job directories under JOBS_DIR and deleted
+    when the job ends. A crash or a force quit skips that cleanup, so the user's
+    documents would otherwise sit in the app data folder indefinitely. Only one
+    engine can own the port, so nothing here can belong to a live server.
+    """
+    if not JOBS_DIR.exists():
+        return
+    for leftover in JOBS_DIR.iterdir():
+        try:
+            if leftover.is_dir():
+                shutil.rmtree(leftover, ignore_errors=True)
+            else:
+                leftover.unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
+def prune_job_progress() -> None:
+    """Drop progress snapshots of jobs nobody is watching any more."""
+    now = time.time()
+    with _JOB_LOCK:
+        for known_id in [
+            known_id
+            for known_id, payload in _JOB_PROGRESS.items()
+            if known_id not in _JOB_EVENTS
+            and now - float(payload.get("updated_at", now)) > _JOB_PROGRESS_TTL_SECONDS
+        ]:
+            _JOB_PROGRESS.pop(known_id, None)
+
+
+async def _prune_loop() -> None:
+    while True:
+        await asyncio.sleep(300)
+        prune_job_progress()
+
+
+@app.on_event("startup")
+async def start_background_maintenance() -> None:
+    sweep_orphan_jobs()
+    app.state.pruner = asyncio.create_task(_prune_loop())
+    app.state.supervisor = asyncio.create_task(_supervise_parent())
+
+
 @app.on_event("shutdown")
-def stop_child_processes() -> None:
+async def stop_child_processes() -> None:
+    for name in ("pruner", "supervisor"):
+        task = getattr(app.state, name, None)
+        if task is not None:
+            task.cancel()
     with _JOB_LOCK:
         events = list(_JOB_EVENTS.values())
     for event in events:
@@ -497,14 +677,27 @@ async def process_streamed_file(
                     destination.write(chunk)
 
             raise_if_cancelled(cancel_event)
-            result = await run_in_threadpool(
-                process_file,
-                source,
-                tool,
-                output_format,
-                language,
-                cancel_event,
+            update_job_progress(
+                active_job_id,
+                state="running",
+                stage="Processing",
+                stage_label="Elaborazione nel motore locale",
             )
+            # A steady heartbeat lets the desktop app tell "still working" apart
+            # from "wedged": engines like Whisper or OCR expose no progress of
+            # their own and can legitimately run for a long time.
+            heartbeat = asyncio.create_task(_heartbeat(active_job_id))
+            try:
+                result = await run_in_threadpool(
+                    process_file,
+                    source,
+                    tool,
+                    output_format,
+                    language,
+                    cancel_event,
+                )
+            finally:
+                heartbeat.cancel()
             result.meta.setdefault("input_bytes", size)
             result.meta.setdefault("streamed_upload", True)
             return response_payload(

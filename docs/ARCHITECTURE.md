@@ -54,6 +54,22 @@ lavoro la UI mostra correttamente un avanzamento indeterminato. Gli output sono
 scritti dentro il contenitore dell’app e i PDF usano un file parziale rinominato
 solo a completamento.
 
+I modelli Ollama vivono in `~/.ollama/models`, la posizione convenzionale di
+Ollama, non dentro il contenitore dell'app. Sono modelli ufficiali del registro
+e pesano quasi 10 GB: un computer che li ha gia', perche' l'utente usa Ollama
+per altro, non ne scarica una seconda copia, e uno che non li ha se li ritrova
+dove Ollama stesso li avrebbe messi. Il bootstrap salta il download di ogni
+modello gia' presente e sposta lo store privato delle versioni precedenti invece
+di riscaricarlo. Un `OLLAMA_MODELS` impostato dall'utente ha sempre la
+precedenza: chi ha spostato i modelli su un disco esterno ha gia' deciso.
+
+Il processo resta invece nostro: l'app avvia il proprio server con la versione
+pinnata e `OLLAMA_HOST=127.0.0.1`, e lo supervisiona. Se ne trova gia' uno in
+esecuzione lo adotta senza spegnerlo mai, perche' appartiene all'utente; in quel
+caso verifica se accetta connessioni oltre a quelle locali e lo segnala in
+Modelli — i documenti restano comunque sul dispositivo, ma quel servizio
+risponde anche ad altri sulla stessa rete.
+
 Il bundle contiene sorgenti e bootstrap comuni, ma non scrive mai nella propria
 directory di installazione. Tauri risolve le risorse in `.app/Contents/Resources`
 su macOS e accanto ai file installati sotto Windows; venv, tool, cache e modelli
@@ -70,19 +86,29 @@ Le differenze di sistema sono circoscritte agli adapter nativi:
 
 ## Contratto dei job
 
-Stati ammessi:
+Stati implementati:
 
 ```text
-draft → queued → preparing → running → finalizing → completed
-                    │            │
-                    ├─ paused    ├─ cancelling → cancelled
-                    └─ failed ←──┘
+queued → preparing → uploading → running → finalizing → completed
+   │          │           │          │
+   │          └───────────┴──────────┴── cancelling → cancelled
+   ├── failed
+   └── interrupted        (era attivo alla chiusura dell'app)
 ```
 
-Ogni transizione dovrà essere atomica e accompagnata da un evento persistente.
-La percentuale sarà deterministica quando il motore fornisce unità di lavoro
-(pagine, segmenti, chunk); altrimenti la UI mostrerà una fase indeterminata senza
-inventare una percentuale.
+`completed`, `failed`, `cancelled` e `interrupted` sono terminali: il database
+rifiuta ogni transizione che tenti di uscirne, così un annullamento che arriva
+dopo il salvataggio non può bloccare un lavoro concluso. Da `failed`,
+`cancelled` e `interrupted` si può tornare in `queued` soltanto con un riavvio
+esplicito dell'utente, possibile quando la fonte è in Libreria.
+
+`paused` non esiste ancora: pausa e ripresa sono in [roadmap](ROADMAP.md) F1.
+
+Ogni transizione è atomica e accompagnata da un evento persistente in
+`job_events`, potato a 200 eventi per lavoro all'avvio. La percentuale è
+deterministica quando il motore fornisce unità di lavoro (pagine, segmenti,
+chunk); altrimenti la UI mostra una fase indeterminata senza inventare un
+numero.
 
 ## Confini di sicurezza
 
@@ -91,4 +117,22 @@ inventare una percentuale.
 - path canonicalizzati e verificati prima dell'indicizzazione o del job rapido;
 - database in WAL, foreign key abilitate e timeout di concorrenza;
 - nessuna shell generica esposta alla UI;
+- token casuale per sessione fra core e motori: il backend su `127.0.0.1:8787`
+  rifiuta ogni richiesta priva del token e ogni richiesta con header `Origin`,
+  quindi nessun'altra applicazione — né una pagina aperta nel browser — può
+  inviargli documenti o interromperne i lavori;
+- alla chiusura l'app termina l'intero process group dei motori, prima con
+  SIGTERM e poi a forza: nessun worker di traduzione sopravvive alla finestra;
+- il motore sorveglia a sua volta l'app che lo ha avviato e si spegne entro
+  cinque secondi se questa sparisce, portando con sé Ollama e le copie di
+  lavoro. Vale anche per un crash, un'Uscita forzata o un `kill -9`, dove
+  nessuna pulizia lato app può essere eseguita: sul computer dell'utente non
+  restano processi né modelli in memoria;
+- una sola istanza per volta: un secondo avvio riporta in primo piano la finestra
+  esistente invece di contendersi database, porta e processi dei motori;
+- i pid dei motori sono registrati con il nome dell'eseguibile, così la pulizia
+  degli orfani dopo un crash non può colpire un pid riciclato da un altro
+  programma;
+- i file di lavoro rimasti da una sessione interrotta vengono rimossi all'avvio
+  successivo, insieme ai risultati `.partial` incompleti;
 - futuro download dei pack con firma, checksum e manifest bloccato per versione.

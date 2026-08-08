@@ -1,16 +1,39 @@
-import { Cpu, Download, HardDrive, Layers3, LoaderCircle, Play } from "lucide-react";
+import {
+  Cpu,
+  Download,
+  FileText,
+  HardDrive,
+  Layers3,
+  LoaderCircle,
+  Play,
+  ShieldAlert,
+  Square,
+} from "lucide-react";
 
 import { engineName } from "../lib/format";
 import type { BridgeStatus, RuntimeStatus, SystemSnapshot } from "../types";
 
 interface ModelsViewProps {
   bridge: BridgeStatus;
+  busy: boolean;
+  hasActiveJobs: boolean;
   runtime: RuntimeStatus;
   system: SystemSnapshot;
+  onOpenLog: (path: string) => void;
   onRuntimeAction: () => void;
+  onStopRuntime: () => void;
 }
 
-export function ModelsView({ bridge, runtime, system, onRuntimeAction }: ModelsViewProps) {
+export function ModelsView({
+  bridge,
+  busy,
+  hasActiveJobs,
+  runtime,
+  system,
+  onOpenLog,
+  onRuntimeAction,
+  onStopRuntime,
+}: ModelsViewProps) {
   return (
     <div className="view-stack">
       <section className="view-intro">
@@ -35,8 +58,12 @@ export function ModelsView({ bridge, runtime, system, onRuntimeAction }: ModelsV
         </div>
         <div>
           <HardDrive size={19} />
-          <span>Posizione</span>
-          <strong>Solo su {system.platformLabel}</strong>
+          <span>Modelli</span>
+          <strong title={runtime.modelsDirectory}>
+            {runtime.modelsDirectory.includes(".ollama")
+              ? "Condivisi con Ollama"
+              : `Solo su ${system.platformLabel}`}
+          </strong>
         </div>
         <div>
           <Layers3 size={19} />
@@ -45,32 +72,74 @@ export function ModelsView({ bridge, runtime, system, onRuntimeAction }: ModelsV
         </div>
       </div>
 
-      {!bridge.available ? (
-        <section className="surface-panel runtime-card" aria-live="polite">
-          <div>
-            <span className="eyebrow">Runtime per {runtime.platform}</span>
-            <h3>{runtime.message}</h3>
-            <p>
-              L’installazione iniziale comprende OCR, trascrizione, conversione,
-              Privacy Filter, traduzione PDF e i relativi modelli. Richiede una
-              connessione e può occupare oltre 20 GB; continua senza aprire terminali.
-            </p>
-            <small>Attività dettagliata: {runtime.logPath}</small>
+      <section className="surface-panel runtime-card" aria-live="polite">
+        <div>
+          <span className="eyebrow">Runtime per {runtime.platform}</span>
+          <h3>{runtime.message}</h3>
+          <p>
+            {bridge.available
+              ? "I motori girano solo sul loopback del dispositivo. Puoi fermarli quando non ti servono: nessun lavoro parte finché non li riavvii."
+              : "L’installazione iniziale comprende OCR, trascrizione, conversione, Privacy Filter, traduzione PDF e i relativi modelli. Richiede una connessione e può occupare oltre 20 GB; continua senza aprire terminali."}
+          </p>
+          <div className="runtime-logs">
+            <button
+              className="text-button"
+              onClick={() => onOpenLog(runtime.logPath)}
+              type="button"
+            >
+              <FileText size={13} /> Log di installazione
+            </button>
+            <button
+              className="text-button"
+              onClick={() => onOpenLog(runtime.runtimeLogPath)}
+              type="button"
+            >
+              <FileText size={13} /> Log dei motori
+            </button>
           </div>
+        </div>
+        {bridge.available ? (
+          <button
+            className="button button-secondary"
+            disabled={busy || hasActiveJobs}
+            onClick={onStopRuntime}
+            title={hasActiveJobs ? "Attendi la fine dei lavori attivi" : undefined}
+            type="button"
+          >
+            <Square size={16} /> Ferma motori
+          </button>
+        ) : (
           <button
             className="button button-primary"
-            disabled={!runtime.supported || runtime.installing}
+            disabled={!runtime.supported || runtime.installing || busy}
             onClick={onRuntimeAction}
             type="button"
           >
             {runtime.installing ? (
               <><LoaderCircle className="spin" size={16} /> Installazione in corso</>
+            ) : busy ? (
+              <><LoaderCircle className="spin" size={16} /> Avvio in corso…</>
             ) : runtime.installed ? (
               <><Play size={16} /> Avvia motori</>
             ) : (
               <><Download size={16} /> Installa motori</>
             )}
           </button>
+        )}
+      </section>
+
+      {runtime.modelsServerExposed ? (
+        <section className="surface-panel exposure-note" role="status">
+          <ShieldAlert size={19} />
+          <div>
+            <strong>Il servizio modelli è raggiungibile dalla rete</strong>
+            <p>
+              Local AI Desk sta usando un Ollama che non ha avviato lui, configurato per
+              accettare connessioni oltre a quelle di questo computer. I tuoi documenti
+              restano sul dispositivo, ma quel servizio risponde anche ad altri sulla
+              stessa rete. Avvialo con <code>OLLAMA_HOST=127.0.0.1</code> se non è voluto.
+            </p>
+          </div>
         </section>
       ) : null}
 

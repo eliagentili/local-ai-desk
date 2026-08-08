@@ -9,6 +9,7 @@ import {
   Wifi,
 } from "lucide-react";
 
+import { formatBytes, formatDateTime } from "../lib/format";
 import type { AppUpdater } from "../hooks/useAppUpdater";
 import type { AppSnapshot } from "../types";
 
@@ -16,26 +17,6 @@ interface SettingsViewProps {
   hasActiveJobs: boolean;
   snapshot: AppSnapshot;
   updater: AppUpdater;
-}
-
-function formatBytes(bytes: number) {
-  if (!bytes) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  const unit = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-  return `${(bytes / 1024 ** unit).toFixed(unit > 1 ? 1 : 0)} ${units[unit]}`;
-}
-
-function formatDate(value: string | null) {
-  if (!value) return null;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  return new Intl.DateTimeFormat("it-IT", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
 }
 
 function updateStatus(updater: AppUpdater) {
@@ -68,8 +49,8 @@ function updateStatus(updater: AppUpdater) {
 }
 
 export function SettingsView({ hasActiveJobs, snapshot, updater }: SettingsViewProps) {
-  const checkedAt = formatDate(updater.lastCheckedAt);
-  const releaseDate = formatDate(updater.releaseDate);
+  const checkedAt = formatDateTime(updater.lastCheckedAt);
+  const releaseDate = formatDateTime(updater.releaseDate);
   const updating = ["downloading", "installing", "restarting"].includes(updater.phase);
   const blocked = hasActiveJobs && ["downloaded", "ready"].includes(updater.phase);
 

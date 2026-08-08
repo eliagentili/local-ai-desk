@@ -1,9 +1,11 @@
 import {
+  AlertTriangle,
   Archive,
   CheckCircle2,
   CircleDashed,
   Clock3,
   FolderOpen,
+  RotateCcw,
   StopCircle,
   XCircle,
 } from "lucide-react";
@@ -21,11 +23,14 @@ const activeStates = new Set([
   "cancelling",
 ]);
 
+const retryableStates = new Set(["failed", "cancelled", "interrupted"]);
+
 interface ActivityViewProps {
   jobs: Job[];
   onCancel: (jobId: string) => void;
   onCancelAll: () => void;
   onExport: (jobIds: string[]) => void;
+  onRetry: (jobId: string) => void;
   onReveal: (jobId: string) => void;
 }
 
@@ -34,9 +39,10 @@ export function ActivityView({
   onCancel,
   onCancelAll,
   onExport,
+  onRetry,
   onReveal,
 }: ActivityViewProps) {
-  const { active, exportable } = useMemo(() => {
+  const { active, exportable, latestBatchSize } = useMemo(() => {
     const current = jobs.filter((job) => activeStates.has(job.status));
     const batches = new Map<string, Job[]>();
     jobs.forEach((job) => {
@@ -45,13 +51,17 @@ export function ActivityView({
       if (batch) batch.push(job);
       else batches.set(key, [job]);
     });
-    const ready =
-      [...batches.values()].find(
-        (batch) =>
-          batch.length > 0 &&
-          batch.every((job) => job.status === "completed" && Boolean(job.outputPath)),
-      ) ?? [];
-    return { active: current, exportable: ready };
+    // Always the most recent batch. Picking the first fully completed one meant
+    // that a single unfinished job silently exported an older batch instead.
+    const latest = [...batches.values()].reduce<Job[]>((best, batch) => {
+      if (!batch.length) return best;
+      if (!best.length) return batch;
+      return batch[0].createdAt > best[0].createdAt ? batch : best;
+    }, []);
+    const ready = latest.filter(
+      (job) => job.status === "completed" && Boolean(job.outputPath),
+    );
+    return { active: current, exportable: ready, latestBatchSize: latest.length };
   }, [jobs]);
 
   return (
@@ -78,7 +88,10 @@ export function ActivityView({
               onClick={() => onExport(exportable.map((job) => job.id))}
               type="button"
             >
-              <Archive size={16} /> ZIP ultimo batch
+              <Archive size={16} />
+              {exportable.length === latestBatchSize
+                ? "ZIP ultimo batch"
+                : `ZIP ultimo batch (${exportable.length} di ${latestBatchSize})`}
             </button>
           ) : null}
         </div>
@@ -140,6 +153,11 @@ export function ActivityView({
                       <span style={indeterminate ? undefined : { width: `${job.progress}%` }} />
                     </div>
                     {job.error ? <small className="job-error">{job.error}</small> : null}
+                    {job.warnings.map((warning) => (
+                      <small className="job-warning" key={warning}>
+                        <AlertTriangle size={12} /> {warning}
+                      </small>
+                    ))}
                     {job.engine ? <small className="job-engine">{job.engine}</small> : null}
                   </div>
                   <div className="activity-meta">
@@ -160,6 +178,10 @@ export function ActivityView({
                     ) : job.status === "completed" ? (
                       <button className="row-action" onClick={() => onReveal(job.id)} type="button">
                         <FolderOpen size={13} /> Mostra
+                      </button>
+                    ) : retryableStates.has(job.status) ? (
+                      <button className="row-action" onClick={() => onRetry(job.id)} type="button">
+                        <RotateCcw size={13} /> Riprova
                       </button>
                     ) : null}
                   </div>

@@ -193,6 +193,7 @@ export function useAppUpdater(hasActiveJobs: boolean): AppUpdater {
     if (!native || !update || busyRef.current) return;
     busyRef.current = true;
     let downloadedBytes = 0;
+    let lastPaintedAt = 0;
 
     try {
       if (!downloadedRef.current) {
@@ -213,7 +214,14 @@ export function useAppUpdater(hasActiveJobs: boolean): AppUpdater {
             }));
           } else if (event.event === "Progress") {
             downloadedBytes += event.data.chunkLength;
-            setSnapshot((current) => ({ ...current, downloadedBytes }));
+            // Chunks arrive in the tens of kilobytes: repainting on each one
+            // costs far more than the extra precision is worth.
+            const now = Date.now();
+            if (now - lastPaintedAt >= 120) {
+              lastPaintedAt = now;
+              const bytes = downloadedBytes;
+              setSnapshot((current) => ({ ...current, downloadedBytes: bytes }));
+            }
           } else {
             setSnapshot((current) => ({
               ...current,
@@ -221,6 +229,7 @@ export function useAppUpdater(hasActiveJobs: boolean): AppUpdater {
             }));
           }
         });
+        setSnapshot((current) => ({ ...current, downloadedBytes }));
         downloadedRef.current = true;
       }
 

@@ -8,9 +8,9 @@ import {
   Sparkles,
   UploadCloud,
 } from "lucide-react";
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 
-import { formatBytes } from "../lib/format";
+import { engineName, formatBytes } from "../lib/format";
 import type {
   BridgeStatus,
   LibraryItem,
@@ -72,6 +72,14 @@ const languages = [
 ] as const;
 
 const translationLanguages = languages.filter(([value]) => value !== "auto");
+
+/** Engine that has to be ready for an intent to produce a real result. `extract`
+ *  routes at run time and `privacy` degrades to local rules, so neither is here. */
+const intentEngine: Partial<Record<WorkflowIntent, string>> = {
+  translate: "pdf-translate",
+  ocr: "paddleocr",
+  transcribe: "faster-whisper",
+};
 
 const intentFormats: Record<WorkflowIntent, Array<[string, string]>> = {
   extract: [
@@ -179,12 +187,26 @@ export function StudioView({
   const selectedQuickCount = Array.from(selected).filter(
     (id) => itemById.get(id)?.status === "temporary",
   ).length;
+  const requiredEngine = useMemo(() => {
+    const engineId = intentEngine[intent];
+    if (!engineId) return null;
+    return bridge.engines.find((engine) => engine.id === engineId) ?? null;
+  }, [bridge.engines, intent]);
+  const engineBlocked = Boolean(
+    bridge.available && requiredEngine && requiredEngine.state !== "ready",
+  );
 
+  // Auto-select each dropped file exactly once. Re-running the selection on
+  // every render kept undoing the user's own deselection.
+  const autoSelected = useRef<Set<string>>(new Set());
   useEffect(() => {
     setSelected((current) => {
       const next = new Set(Array.from(current).filter((id) => itemById.has(id)));
       for (const item of quickItems) {
-        if (supportsIntent(item, intent)) next.add(item.id);
+        if (!autoSelected.current.has(item.id) && supportsIntent(item, intent)) {
+          autoSelected.current.add(item.id);
+          next.add(item.id);
+        }
       }
       return next;
     });
@@ -441,7 +463,7 @@ export function StudioView({
           </div>
           <button
             className="button button-primary run-button"
-            disabled={!selected.size || !bridge.available || starting}
+            disabled={!selected.size || !bridge.available || engineBlocked || starting}
             onClick={start}
             type="button"
           >
@@ -450,6 +472,12 @@ export function StudioView({
               ? "Preparazione del batch…"
               : `Avvia ${selected.size || ""} ${selected.size === 1 ? "lavoro" : "lavori"}`}
           </button>
+          {engineBlocked && requiredEngine ? (
+            <p className="config-blocked" role="status">
+              {engineName(requiredEngine.id)} non è pronto: {requiredEngine.label}.
+              Completa l’installazione da Modelli prima di avviare questo tipo di lavoro.
+            </p>
+          ) : null}
           <p className="config-note">
             Gli originali non vengono modificati. I file rapidi non entrano nel database;
             le copie di trasferimento vengono eliminate anche in caso di errore o annullamento.

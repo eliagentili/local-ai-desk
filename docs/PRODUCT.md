@@ -24,9 +24,11 @@ senza dover conoscere modelli, dipendenze o terminale.
    modelli e parametri avanzati restano accessibili.
 6. **Ripartenza sicura.** Coda e risultati sopravvivono a chiusure, errori e
    riavvii.
-7. **Accessibilità e internazionalizzazione dal primo giorno.** Tastiera,
-   VoiceOver, contrasto, movimento ridotto e stringhe traducibili non sono una
-   rifinitura finale.
+7. **Accessibilità dal primo giorno.** Tastiera, VoiceOver, contrasto,
+   movimento ridotto e tema di sistema non sono una rifinitura finale.
+   L'internazionalizzazione è invece dichiarata per quello che è: l'interfaccia
+   è oggi solo in italiano e le localizzazioni complete sono in
+   [roadmap](ROADMAP.md) F5.
 
 ## Superfici definitive
 
