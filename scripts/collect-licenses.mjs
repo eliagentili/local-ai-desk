@@ -22,13 +22,15 @@
 
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outputPath = join(repositoryRoot, "THIRD_PARTY_LICENSES.md");
-const cachePath = join(tmpdir(), "local-ai-desk-pypi-licenses.json");
+// Inside the repository rather than the shared temp directory: a predictable
+// name under a world-writable path lets any other account on the machine decide
+// what this script reads, and the answer ends up in a published licence file.
+const cachePath = join(repositoryRoot, ".cache", "pypi-licenses.json");
 const PYPI_CONCURRENCY = 8;
 
 /**
@@ -120,7 +122,10 @@ function fail(message) {
 }
 
 function escapeCell(value) {
-  return value.replace(/\|/g, "\\|").replace(/\n/g, " ").trim();
+  // Backslash first: escaping the pipe before the backslash would turn a literal
+  // `\` in a package name into the escape character of the pipe that follows it,
+  // and the cell would break the table it is supposed to sit in.
+  return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\n/g, " ").trim();
 }
 
 function normaliseDeclaredLicense(raw) {
@@ -159,6 +164,7 @@ async function readCache() {
 }
 
 async function writeCache(cache) {
+  await mkdir(dirname(cachePath), { recursive: true });
   await writeFile(cachePath, `${JSON.stringify(Object.fromEntries(cache), null, 0)}\n`, "utf8");
 }
 
