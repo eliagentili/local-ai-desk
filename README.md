@@ -60,7 +60,7 @@ modificati. Rimangono soltanto i risultati che hai scelto di creare.
 | **Traduci PDF** | PDF tradotto o bilingue con layout, immagini e formule | PDFMathTranslate 2 + TranslateGemma |
 | **Forza OCR** | Markdown, testo o JSON da scansioni e immagini | PaddleOCR / GLM-OCR |
 | **Trascrivi** | Testo, sottotitoli SRT o JSON da audio e video | Faster Whisper |
-| **Proteggi dati** | Testo mascherato o JSON con i rilevamenti | OpenAI Privacy Filter (locale) + regole italiane |
+| **Proteggi dati** | Testo mascherato o JSON con i rilevamenti | Regole italiane, piu' il modello Privacy Filter se scaricato |
 
 ![Attività completata con risultato locale](docs/screenshots/f1-activity-completed.png)
 
@@ -139,6 +139,14 @@ i soli processi che ha avviato.
 I modelli Ollama stanno invece in `~/.ollama/models`, dove Ollama stesso li
 tiene: se li hai gia' perche' usi Ollama per altro, non vengono riscaricati, e
 l'installazione salta quasi 10 GB.
+
+Il modello del Privacy Shield (2,6 GB) non e' incluso: si scarica quando serve,
+con un pulsante in **Modelli**. Fino ad allora la mascheratura usa le sole regole
+italiane e lo dichiara nel risultato.
+
+Il modello del Privacy Shield (2,6 GB) non e' incluso: lo scarichi da **Modelli**
+solo se ti serve. Senza, il mascheramento usa le regole italiane e lo dichiara
+in ogni risultato.
 
 ## Sviluppo
 

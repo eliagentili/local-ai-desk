@@ -63,6 +63,14 @@ modello gia' presente e sposta lo store privato delle versioni precedenti invece
 di riscaricarlo. Un `OLLAMA_MODELS` impostato dall'utente ha sempre la
 precedenza: chi ha spostato i modelli su un disco esterno ha gia' deciso.
 
+Il checkpoint del Privacy Filter (2,6 GB) non fa parte dell'installazione: lo
+scarica l'utente da Modelli quando gli serve. Arriva in una cartella di staging
+e viene spostato in posizione solo a download completo, perche' scrivendo
+direttamente nella destinazione `config.json` comparirebbe dopo pochi secondi e
+`engine_status` dichiarerebbe il motore pronto mentre i pesi stanno ancora
+arrivando. Fino ad allora Privacy Shield lavora sulle sole regole italiane e lo
+dichiara nel risultato.
+
 Il processo resta invece nostro: l'app avvia il proprio server con la versione
 pinnata e `OLLAMA_HOST=127.0.0.1`, e lo supervisiona. Se ne trova gia' uno in
 esecuzione lo adotta senza spegnerlo mai, perche' appartiene all'utente; in quel
@@ -83,6 +91,21 @@ Le differenze di sistema sono circoscritte agli adapter nativi:
 - process group POSIX e `CREATE_NEW_PROCESS_GROUP`/`CREATE_NO_WINDOW` su Windows;
 - `.venv/bin` su Unix e `.venv\Scripts` su Windows;
 - `.app`/`.dmg` su macOS e NSIS `.exe`/WiX `.msi` su Windows.
+
+## Model pack
+
+Quasi tutti i modelli arrivano con l'installazione iniziale. Il checkpoint del
+Privacy Filter pesa 2,6 GB e serve solo a chi maschera dati personali, quindi si
+scarica su richiesta da **Modelli**: fino ad allora il motore lavora sulle sole
+regole italiane e lo dichiara nel risultato, invece di risultare semplicemente
+«completato».
+
+Il download finisce in una cartella di staging e viene spostato a destinazione
+solo quando è completo. Scrivendo direttamente nella destinazione, `config.json`
+comparirebbe dopo pochi secondi e `engine_status` dichiarerebbe il motore pronto
+mentre i pesi stanno ancora arrivando: i lavori finirebbero su un modello che non
+c'è. Del repository viene scaricata solo la sottocartella del checkpoint —
+senza quel filtro sarebbero circa 17 GB invece di 2,6.
 
 ## Contratto dei job
 
