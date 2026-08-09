@@ -1,0 +1,28 @@
+name: Pinned assets
+
+# The bootstrap refuses anything whose SHA-256 does not match, which protects the
+# user from a tampered download but says nothing about an upstream release that
+# was deleted or republished: in that case the installation simply stops
+# halfway. This runs on its own schedule so the maintainer finds out first, and
+# stays out of the pull-request path because it downloads more than a gigabyte.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 4 * * 2"
+
+permissions:
+  contents: read
+
+jobs:
+  pinned-assets:
+    name: Re-download and verify the pinned assets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Verify the manifest against the bootstrap scripts
+        run: node scripts/check-runtime-manifest.mjs
+      - name: Verify the digests of the pinned downloads
+        run: node scripts/verify-pinned-assets.mjs
