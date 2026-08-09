@@ -1,7 +1,6 @@
 import type { ComponentType } from "react";
 import {
   Activity,
-  Boxes,
   FolderOpen,
   Home,
   Library,
@@ -21,7 +20,6 @@ const navigation: NavigationItem[] = [
   { id: "home", label: "Home", icon: Home },
   { id: "library", label: "Libreria", icon: Library },
   { id: "studio", label: "Studio", icon: Sparkles },
-  { id: "workflows", label: "Workflow", icon: Boxes },
   { id: "activity", label: "Attività", icon: Activity },
   { id: "models", label: "Modelli", icon: FolderOpen },
   { id: "settings", label: "Impostazioni", icon: Settings },

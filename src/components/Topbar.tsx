@@ -1,17 +1,8 @@
 import { Archive, CloudOff, Cpu, Download, RotateCw } from "lucide-react";
 
 import type { AppUpdater } from "../hooks/useAppUpdater";
+import { sectionTitles } from "../lib/strings";
 import type { BridgeStatus, SectionId } from "../types";
-
-const sectionTitles: Record<SectionId, string> = {
-  home: "Panoramica",
-  library: "Libreria",
-  studio: "Studio",
-  workflows: "Workflow",
-  activity: "Attività",
-  models: "Modelli locali",
-  settings: "Impostazioni",
-};
 
 interface TopbarProps {
   active: SectionId;

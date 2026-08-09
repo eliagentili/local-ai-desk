@@ -11,15 +11,20 @@ import {
   Square,
 } from "lucide-react";
 
-import { engineName, formatBytes } from "../lib/format";
+import { describeError } from "../lib/errors";
+import { formatBytes } from "../lib/format";
+import { engineName, install } from "../lib/strings";
 import type { BridgeStatus, RuntimeStatus, SystemSnapshot } from "../types";
+import { InstallProgress } from "./InstallProgress";
 
 interface ModelsViewProps {
   bridge: BridgeStatus;
   busy: boolean;
+  cancellingInstall: boolean;
   hasActiveJobs: boolean;
   runtime: RuntimeStatus;
   system: SystemSnapshot;
+  onCancelInstall: () => void;
   onDownloadModel: (engineId: string) => void;
   onOpenLog: (path: string) => void;
   onRuntimeAction: () => void;
@@ -29,14 +34,22 @@ interface ModelsViewProps {
 export function ModelsView({
   bridge,
   busy,
+  cancellingInstall,
   hasActiveJobs,
   runtime,
   system,
+  onCancelInstall,
   onDownloadModel,
   onOpenLog,
   onRuntimeAction,
   onStopRuntime,
 }: ModelsViewProps) {
+  const spaceKnown = runtime.freeBytes > 0;
+  const missingBytes = Math.max(0, runtime.requiredBytes - runtime.freeBytes);
+  // Only the install needs this much room; a runtime already on disk just has to
+  // start, so the check never blocks "Avvia motori".
+  const notEnoughSpace = !runtime.installed && spaceKnown && missingBytes > 0;
+
   return (
     <div className="view-stack">
       <section className="view-intro">
@@ -75,7 +88,10 @@ export function ModelsView({
         </div>
       </div>
 
-      <section className="surface-panel runtime-card" aria-live="polite">
+      {/* No `aria-live` here: the card re-renders on a four-second poll, so a live
+          region on it read the whole panel back on every unrelated change. The
+          install phase is announced once per phase, from App. */}
+      <section className="surface-panel runtime-card">
         <div>
           <span className="eyebrow">Runtime per {runtime.platform}</span>
           <h3>{runtime.message}</h3>
@@ -84,6 +100,12 @@ export function ModelsView({
               ? "I motori girano solo sul loopback del dispositivo. Puoi fermarli quando non ti servono: nessun lavoro parte finché non li riavvii."
               : "L’installazione iniziale comprende OCR, trascrizione, conversione, Privacy Filter, traduzione PDF e i relativi modelli. Richiede una connessione e può occupare oltre 20 GB; continua senza aprire terminali."}
           </p>
+          {!runtime.installed && !runtime.installing ? (
+            <p className="runtime-space">
+              {install.requires(formatBytes(runtime.requiredBytes))}
+              {spaceKnown ? ` · ${formatBytes(runtime.freeBytes)} ${install.spaceOk}` : ""}
+            </p>
+          ) : null}
           <div className="runtime-logs">
             <button
               className="text-button"
@@ -111,16 +133,14 @@ export function ModelsView({
           >
             <Square size={16} /> Ferma motori
           </button>
-        ) : (
+        ) : runtime.installing ? null : (
           <button
             className="button button-primary"
-            disabled={!runtime.supported || runtime.installing || busy}
+            disabled={!runtime.supported || notEnoughSpace || busy}
             onClick={onRuntimeAction}
             type="button"
           >
-            {runtime.installing ? (
-              <><LoaderCircle className="spin" size={16} /> Installazione in corso</>
-            ) : busy ? (
+            {busy ? (
               <><LoaderCircle className="spin" size={16} /> Avvio in corso…</>
             ) : runtime.installed ? (
               <><Play size={16} /> Avvia motori</>
@@ -131,8 +151,36 @@ export function ModelsView({
         )}
       </section>
 
+      {runtime.installing ? (
+        <section className="surface-panel install-card">
+          <InstallProgress
+            cancelling={cancellingInstall}
+            onCancel={onCancelInstall}
+            runtime={runtime}
+          />
+        </section>
+      ) : null}
+
+      {/* Said before the button is pressed, with the gigabytes that are missing:
+          the core refuses the install below the threshold, and discovering it
+          after a download of tens of gigabytes is the worst possible moment. */}
+      {notEnoughSpace ? (
+        <div className="inline-alert install-blocked" data-tone="error">
+          <span>{install.notEnoughSpaceTitle}</span>
+          <p>
+            {install.missingSpace(
+              formatBytes(missingBytes),
+              formatBytes(runtime.requiredBytes),
+            )}
+          </p>
+        </div>
+      ) : null}
+
+      {/* The visible panel is not a live region: the announcement comes from the
+          always-mounted region in App, which assistive technology saw empty
+          first. Mounted together with its text, this warning was never read. */}
       {runtime.modelsServerExposed ? (
-        <section className="surface-panel exposure-note" role="status">
+        <section className="surface-panel exposure-note">
           <ShieldAlert size={19} />
           <div>
             <strong>Il servizio modelli è raggiungibile dalla rete</strong>
@@ -204,7 +252,9 @@ export function ModelsView({
                           {engine.packBytes > 0 ? ` · ${formatBytes(engine.packBytes)}` : ""}
                         </button>
                         {engine.downloadError ? (
-                          <small className="job-error">{engine.downloadError}</small>
+                          <small className="job-error">
+                            {describeError(engine.downloadError)}
+                          </small>
                         ) : (
                           <small>
                             Finché manca, questo motore lavora in modalità ridotta e lo

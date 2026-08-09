@@ -2,7 +2,6 @@ export type SectionId =
   | "home"
   | "library"
   | "studio"
-  | "workflows"
   | "activity"
   | "models"
   | "settings";
@@ -48,6 +47,17 @@ export interface Job {
   error: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** One recorded transition of a job, appended by the core and never rewritten:
+ *  read in order it is the audit trail of what the engine actually did. */
+export interface JobEvent {
+  id: number;
+  status: string;
+  progress: number;
+  stage: string;
+  message: string | null;
+  createdAt: string;
 }
 
 export interface EngineStatus {
@@ -97,6 +107,16 @@ export interface RuntimeStatus {
   runtimeLogPath: string;
   modelsDirectory: string;
   modelsServerExposed: boolean;
+  /** Current bootstrap phase, parsed from the `[n/totale]` marker the install
+   *  scripts print. `installStep` is 0 while the phase is still unknown. */
+  installStep: number;
+  installStepTotal: number;
+  installStepLabel: string;
+  /** Free space on the volume that holds the data directory, and the space the
+   *  install needs. `freeBytes` is 0 when the volume could not be measured, so
+   *  a failed detection must never be shown as "no space". */
+  freeBytes: number;
+  requiredBytes: number;
   message: string;
 }
 

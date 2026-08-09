@@ -30,8 +30,16 @@ const mappings: Mapping[] = [
     message:
       "Il file non si trova più nel percorso indicato: potrebbe essere stato spostato o rinominato.",
   },
+  // Before the two branches below, because a connect timeout matches both and
+  // neither of their messages is right: nothing refused the connection and the
+  // operation never started.
   {
-    match: /connection refused|connect(ion)? error|tcp connect|os error 61\b/i,
+    match: /connect(ion)? timed? out|connect timeout|os error 60\b/i,
+    message:
+      "I motori locali non hanno risposto in tempo. Aprili da Modelli, verifica che siano avviati e riprova.",
+  },
+  {
+    match: /connection (refused|reset)|connect(ion)? error|tcp connect|os error 61\b/i,
     message:
       "I motori locali non rispondono. Aprili da Modelli, avviali e riprova.",
   },

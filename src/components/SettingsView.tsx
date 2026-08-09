@@ -2,53 +2,36 @@ import {
   BadgeCheck,
   CloudOff,
   Download,
+  ExternalLink,
+  FileText,
   HardDrive,
   RefreshCw,
   RotateCw,
+  Scale,
   ShieldCheck,
   Wifi,
 } from "lucide-react";
 
 import { formatBytes, formatDateTime } from "../lib/format";
 import type { AppUpdater } from "../hooks/useAppUpdater";
+import { license, updatePhaseStatus } from "../lib/strings";
 import type { AppSnapshot } from "../types";
 
 interface SettingsViewProps {
   hasActiveJobs: boolean;
   snapshot: AppSnapshot;
   updater: AppUpdater;
+  onOpenLicense: () => void;
+  onOpenRepository: () => void;
 }
 
-function updateStatus(updater: AppUpdater) {
-  switch (updater.phase) {
-    case "unsupported":
-      return "Disponibile nell’app installata";
-    case "checking":
-      return "Controllo in corso…";
-    case "current":
-      return "Hai già l’ultima versione";
-    case "available":
-      return `Versione ${updater.availableVersion} disponibile`;
-    case "downloading":
-      return updater.progress === null
-        ? "Download protetto in corso…"
-        : `Download ${updater.progress}%`;
-    case "downloaded":
-      return "Download completato, pronto per l’installazione";
-    case "installing":
-      return "Verifica firma e preparazione…";
-    case "ready":
-      return "Aggiornamento pronto al riavvio";
-    case "restarting":
-      return "Riavvio in corso…";
-    case "error":
-      return "Controllo non riuscito";
-    default:
-      return "Controllo automatico attivo";
-  }
-}
-
-export function SettingsView({ hasActiveJobs, snapshot, updater }: SettingsViewProps) {
+export function SettingsView({
+  hasActiveJobs,
+  snapshot,
+  updater,
+  onOpenLicense,
+  onOpenRepository,
+}: SettingsViewProps) {
   const checkedAt = formatDateTime(updater.lastCheckedAt);
   const releaseDate = formatDateTime(updater.releaseDate);
   const updating = ["downloading", "installing", "restarting"].includes(updater.phase);
@@ -96,12 +79,15 @@ export function SettingsView({ hasActiveJobs, snapshot, updater }: SettingsViewP
         </span>
       </section>
 
-      <section className="surface-panel update-card" aria-live="polite">
+      {/* No `aria-live`: the download repaints roughly eight times a second and a
+          live region here read the whole card back on every repaint. The single
+          announcement lives in App and fires at 25/50/75/100 per cent. */}
+      <section className="surface-panel update-card">
         <div className="update-card-heading">
           <div>
             <span className="eyebrow">Canale pubblico · Beta</span>
             <h3>Aggiornamenti dell’app</h3>
-            <p>{updateStatus(updater)}</p>
+            <p>{updatePhaseStatus(updater.phase, updater.availableVersion, updater.progress)}</p>
           </div>
           <span className="signed-badge">
             <BadgeCheck size={15} />
@@ -126,6 +112,13 @@ export function SettingsView({ hasActiveJobs, snapshot, updater }: SettingsViewP
               aria-valuemax={100}
               aria-valuemin={0}
               aria-valuenow={updater.progress ?? undefined}
+              aria-valuetext={
+                updater.phase === "installing"
+                  ? "Verifica della firma e installazione"
+                  : updater.progress === null
+                    ? "Download in corso, percentuale non disponibile"
+                    : `${updater.progress}% scaricato`
+              }
               className="update-progress-track"
               role="progressbar"
             >
@@ -206,6 +199,38 @@ export function SettingsView({ hasActiveJobs, snapshot, updater }: SettingsViewP
           <code title={snapshot.system.dataDirectory}>{snapshot.system.dataDirectory}</code>
           <p>Originali e risultati restano intatti anche durante l’aggiornamento dell’app.</p>
         </article>
+      </section>
+
+      {/* An AGPL obligation, not a nicety: a binary that carries no licence and no
+          pointer to its source is distributed outside the terms it is under. */}
+      <section className="surface-panel license-card">
+        <div className="license-icon" aria-hidden="true">
+          <Scale size={21} />
+        </div>
+        <div className="license-copy">
+          <span className="eyebrow">{license.eyebrow}</span>
+          <h3>{license.title}</h3>
+          <p>{license.detail}</p>
+          <p>{license.thirdParty}</p>
+        </div>
+        <div className="license-facts">
+          <span>
+            {license.versionLabel}
+            <strong>{updater.native ? `v${updater.currentVersion}` : updater.currentVersion}</strong>
+          </span>
+          <span>
+            Licenza
+            <strong>{license.identifier}</strong>
+          </span>
+        </div>
+        <div className="license-actions">
+          <button className="button button-secondary" onClick={onOpenLicense} type="button">
+            <FileText size={16} /> {license.showLicense}
+          </button>
+          <button className="button button-secondary" onClick={onOpenRepository} type="button">
+            <ExternalLink size={16} /> {license.openRepository}
+          </button>
+        </div>
       </section>
 
       <section className="surface-panel diagnostics-card">
