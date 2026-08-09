@@ -1,0 +1,22 @@
+# Line endings are part of the content here, not a formatting preference.
+#
+# engine/runtime-manifest.json pins the SHA-256 of every lock file, and
+# scripts/check-runtime-manifest.mjs recomputes it from the bytes on disk. With
+# git's default autocrlf on Windows, a checkout rewrites those bytes and all five
+# digests stop matching: the checker reported five failures that existed only on
+# the Windows runner. A pinned digest has to describe the same file everywhere,
+# so every text file is checked out with LF regardless of platform.
+#
+# The shell scripts need LF to run at all; the PowerShell script is indifferent.
+* text=auto eol=lf
+
+# Declared explicitly so no future .gitattributes rule can decide to translate
+# them: a converted byte in an icon is a corrupt icon.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.icns binary
+*.pdf binary
+*.zip binary
+*.dmg binary
