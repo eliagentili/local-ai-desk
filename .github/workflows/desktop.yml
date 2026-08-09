@@ -56,6 +56,56 @@ jobs:
           LOCAL_AI_ENGINE_HOME: ${{ runner.temp }}/local-ai-engine-tests
         run: python -m unittest discover -s engine/tests -v
 
+  quality:
+    name: Frontend quality gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Without this gate the literal colours removed from App.css come back on
+      # the first commit, and text under 11px with them.
+      - name: Lint stylesheets
+        run: npm run lint
+      - name: Test frontend
+        run: npm test
+      # Measures the state tokens in both themes: the dark theme once shipped an
+      # updater error at 1.40:1, which no type-check or linter can see.
+      - name: Check colour contrast
+        run: npm run test:contrast
+
+  licenses:
+    name: Third-party licence inventory
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri
+          shared-key: licenses
+      # Regenerates the inventory from the locks, the Cargo graph and the npm
+      # lock and fails if the committed file drifted: the hand-written version
+      # described 16 components out of roughly 290.
+      - name: Verify the licence inventory against the locks
+        run: npm run test:licenses
+      - name: Upload the licence inventory
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: local-ai-desk-licenses
+          path: THIRD_PARTY_LICENSES.md
+          if-no-files-found: error
+          retention-days: 7
+
   desktop:
     name: ${{ matrix.label }}
     runs-on: ${{ matrix.platform }}
@@ -131,6 +181,61 @@ jobs:
           uploadWorkflowArtifacts: true
           uploadUpdaterSignatures: true
           workflowArtifactNamePattern: "local-ai-desk-2-[platform]-[arch]-[bundle]"
+      # The pipeline built bundles for six releases and never opened one. These
+      # two steps do what a user does first: look at the package, then start it.
+      # No Developer ID and no Authenticode are involved — the 1.0 ships unsigned
+      # by decision — but an ad-hoc signature must still be present and valid, and
+      # the binary must survive its own launch.
+      - name: Smoke-test the macOS bundle
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          bundle_dir=src-tauri/target/aarch64-apple-darwin/release/bundle
+          apps=("$bundle_dir"/macos/*.app)
+          dmgs=("$bundle_dir"/dmg/*.dmg)
+          test "${#apps[@]}" -eq 1
+          test "${#dmgs[@]}" -eq 1
+          app="${apps[0]}"
+          # An ad-hoc signature is still a signature: if this fails the bundle is
+          # broken, not merely unsigned by a certificate authority.
+          codesign -dv --verbose=4 "$app"
+          # The executable inside the bundle carries the crate name, not the
+          # product name, so it is read from the bundle instead of guessed.
+          binaries=("$app"/Contents/MacOS/*)
+          test "${#binaries[@]}" -eq 1
+          binary="${binaries[0]}"
+          test -x "$binary"
+          "$binary" >launch.log 2>&1 &
+          pid=$!
+          sleep 15
+          if ! kill -0 "$pid" 2>/dev/null; then
+            echo "L'applicazione è terminata subito dopo l'avvio."
+            cat launch.log
+            exit 1
+          fi
+          kill "$pid"
+          wait "$pid" 2>/dev/null || true
+      - name: Smoke-test the Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Setup = Get-ChildItem 'src-tauri/target/release/bundle/nsis/*-setup.exe' | Select-Object -First 1
+          if (-not $Setup) { throw "Installer NSIS non prodotto dal bundle." }
+          # /S is the silent mode of the NSIS installer; currentUser install mode
+          # puts the app under LOCALAPPDATA, no elevation involved.
+          $Install = Start-Process -FilePath $Setup.FullName -ArgumentList '/S' -Wait -PassThru
+          if ($Install.ExitCode -ne 0) { throw "Installazione silenziosa fallita con codice $($Install.ExitCode)." }
+          # installMode: currentUser puts the app under LOCALAPPDATA\<productName>.
+          $Root = Join-Path $env:LOCALAPPDATA 'Local AI Desk 2'
+          $Installed = Get-ChildItem -Path $Root -Filter '*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $Installed) { throw "Eseguibile non trovato in $Root dopo l'installazione." }
+          $App = Start-Process -FilePath $Installed.FullName -PassThru
+          Start-Sleep -Seconds 15
+          if ($App.HasExited) { throw "L'applicazione è terminata subito dopo l'avvio con codice $($App.ExitCode)." }
+          Stop-Process -Id $App.Id -Force
       - name: Upload signed updater payloads
         if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -145,6 +250,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      # The cataloguer only reads files whose name matches *requirements*.txt, and
+      # the pinned environments live in `.lock` files: without this step the SBOM
+      # listed the 21 packages of the top-level requirements instead of the ~290
+      # the app installs, and the notices pointed at it as proof of coverage.
+      - name: Expose the pinned locks to the SBOM cataloguer
+        run: node scripts/collect-licenses.mjs --requirements-out engine/sbom-requirements
       - name: Generate SPDX SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
@@ -158,7 +272,7 @@ jobs:
   release:
     name: Publish GitHub release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [engine-tests, desktop, sbom]
+    needs: [engine-tests, quality, licenses, desktop, sbom]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -168,21 +282,39 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+          cache: npm
+      # The signer used below is the pinned Tauri CLI from the lockfile, not a
+      # package fetched at publish time.
+      - run: npm ci
       # A tag that disagrees with the compiled version makes every client see an
       # update that installs the same build, forever. Fail before publishing.
+      #
+      # package-lock.json and the WiX version are checked too, and both for a
+      # concrete failure: the lock names the application inside the SBOM, so a
+      # stale value publishes an inventory attributed to the wrong release; and
+      # Windows Installer compares ProductVersion, so an MSI built with the old
+      # four-part number refuses to upgrade in place while the CI stays green.
       - name: Verify version coherence with the tag
         run: |
           node -e '
             const fs = require("fs");
             const tag = process.env.GITHUB_REF_NAME.replace(/^v/, "");
             const pkg = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
-            const conf = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8")).version;
+            const lock = JSON.parse(fs.readFileSync("package-lock.json", "utf8"));
+            const conf = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8"));
             const cargo = fs.readFileSync("src-tauri/Cargo.toml", "utf8").match(/^version = "(.+)"/m)[1];
-            if (new Set([tag, pkg, conf, cargo]).size !== 1) {
-              console.error("version mismatch", { tag, pkg, conf, cargo });
+            const versions = { tag, pkg, lock: lock.version, lockRoot: lock.packages[""].version, conf: conf.version, cargo };
+            if (new Set(Object.values(versions)).size !== 1) {
+              console.error("version mismatch", versions);
               process.exit(1);
             }
-            console.log("versions agree:", tag);
+            const wix = conf.bundle?.windows?.wix?.version;
+            const numeric = tag.replace(/-.*$/, "");
+            if (typeof wix !== "string" || !new RegExp("^" + numeric.replace(/\./g, "\\.") + "\\.\\d+$").test(wix)) {
+              console.error("wix version out of step with the tag", { tag, numeric, wix });
+              process.exit(1);
+            }
+            console.log("versions agree:", tag, "· wix", wix);
           '
       - name: Download installers
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -194,26 +326,51 @@ jobs:
         with:
           name: local-ai-desk-source.spdx.json
           path: downloaded/sbom
+      - name: Download the licence inventory
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: local-ai-desk-licenses
+          path: downloaded/licenses
       - name: Prepare release assets and checksums
+        id: assets
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
           RELEASE_NOTES_FILE: .github/release-notes/${{ github.ref_name }}.md
           RELEASE_TAG: ${{ github.ref_name }}
         run: node scripts/prepare-release-assets.mjs downloaded release-assets
+      # Checksums are only worth reading if their list cannot be swapped along
+      # with the files it describes, so the list is signed with the same key as
+      # the update packages and the public key travels with the release.
+      - name: Sign the checksum list
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        # The signer reads both secrets from the environment, so neither appears
+        # in a command line other processes on the runner could read.
+        run: |
+          set -euo pipefail
+          npx tauri signer sign release-assets/SHA256SUMS.txt
+          test -s release-assets/SHA256SUMS.txt.sig
       # A rotated signing secret would otherwise ship a release that no client
       # can install, because the app only trusts the public key compiled into it.
+      # The checksum signature is verified here too: the instructions shipped
+      # with the release tell users to run exactly this command.
       - name: Verify updater signatures against the shipped public key
         run: |
           set -euo pipefail
           sudo apt-get update && sudo apt-get install -y minisign
-          node -e 'process.stdout.write(Buffer.from(JSON.parse(require("fs").readFileSync("src-tauri/tauri.conf.json","utf8")).plugins.updater.pubkey,"base64").toString())' > updater.pub
-          for asset in Local-AI-Desk-macOS-Apple-Silicon.app.tar.gz Local-AI-Desk-Windows-x64-Setup.exe; do
+          for asset in Local-AI-Desk-macOS-Apple-Silicon.app.tar.gz Local-AI-Desk-Windows-x64-Setup.exe SHA256SUMS.txt; do
             base64 -d "release-assets/$asset.sig" > "$asset.minisig"
-            minisign -V -p updater.pub -x "$asset.minisig" -m "release-assets/$asset"
+            minisign -V -p release-assets/local-ai-desk-updater.pub -x "$asset.minisig" -m "release-assets/$asset"
           done
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          # Derived from the tag suffix by the asset script, so the channel of the
+          # GitHub release and the name of the update manifest can never disagree:
+          # a prerelease publishes beta.json and stays out of `releases/latest`,
+          # which is where installations on the stable channel look.
+          PRERELEASE: ${{ steps.assets.outputs.prerelease }}
         run: |
           set -euo pipefail
           notes_file=".github/release-notes/${GITHUB_REF_NAME}.md"
@@ -222,8 +379,13 @@ jobs:
           else
             notes_args=(--generate-notes)
           fi
+          if [[ "$PRERELEASE" == "true" ]]; then
+            channel_args=(--prerelease)
+          else
+            channel_args=(--latest)
+          fi
           gh release create "${GITHUB_REF_NAME}" release-assets/* \
             --verify-tag \
-            --latest \
+            "${channel_args[@]}" \
             --title "Local AI Desk 2 ${GITHUB_REF_NAME#v}" \
             "${notes_args[@]}"

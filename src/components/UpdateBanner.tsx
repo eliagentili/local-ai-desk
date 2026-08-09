@@ -25,7 +25,9 @@ export function UpdateBanner({ hasActiveJobs, onOpenSettings, updater }: UpdateB
   };
 
   return (
-    <aside className="update-banner" aria-label="Aggiornamento disponibile" aria-live="polite">
+    // No `aria-live`: with the percentage inside, this banner re-announced
+    // itself about eight times a second. The single announcement is in App.
+    <aside className="update-banner" aria-label="Aggiornamento disponibile">
       <div className="update-banner-icon" aria-hidden="true">
         {ready ? <RotateCw size={19} /> : busy ? <RefreshCw className="spin" size={19} /> : <Download size={19} />}
       </div>

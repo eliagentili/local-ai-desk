@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 
 import { formatBytes, formatDate } from "../lib/format";
+import { roadmapNote } from "../lib/strings";
 import type { AppSnapshot, SectionId } from "../types";
 
 interface DashboardProps {
@@ -104,6 +105,9 @@ export function Dashboard({ snapshot, onImport, onQuickPick, onNavigate }: Dashb
             onClick={() => onNavigate("studio")}
           />
         </div>
+        {/* The sidebar used to carry a "Workflow" entry that opened a page with
+            nothing in it. The promise belongs here, as a declared absence. */}
+        <p className="roadmap-note">{roadmapNote}</p>
       </section>
 
       <section className="metrics-grid" aria-label="Stato del workspace">

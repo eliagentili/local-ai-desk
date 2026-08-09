@@ -2,27 +2,35 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { AlertCircle, CheckCircle2, FileUp, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import "./App.css";
 import { ActivityView } from "./components/ActivityView";
 import { Dashboard } from "./components/Dashboard";
 import { LibraryView } from "./components/LibraryView";
 import { ModelsView } from "./components/ModelsView";
-import { PlaceholderView } from "./components/PlaceholderView";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar } from "./components/Sidebar";
 import { StudioView } from "./components/StudioView";
 import { Topbar } from "./components/Topbar";
 import { UpdateBanner } from "./components/UpdateBanner";
+import { WelcomeView } from "./components/WelcomeView";
 import { useAppUpdater } from "./hooks/useAppUpdater";
 import { describeError } from "./lib/errors";
+import {
+  announce,
+  jobHistory,
+  license,
+  sectionTitles,
+  updatePhaseStatus,
+} from "./lib/strings";
 import type {
   AppSnapshot,
   BridgeStatus,
   ExportReport,
   ImportReport,
   Job,
+  JobEvent,
   LibraryItem,
   QuickFilesReport,
   SectionId,
@@ -38,6 +46,21 @@ const activeJobStates = new Set([
   "running",
   "finalizing",
   "cancelling",
+]);
+
+/** Percentages worth interrupting a screen reader for. A download announced on
+ *  every repaint — about eight times a second — is unusable. */
+const updateAnnouncementThresholds = [25, 50, 75, 100];
+
+/** Update phases where one sentence is genuinely news. `checking` and
+ *  `downloading` are excluded: the first is noise, the second has thresholds. */
+const announcedUpdatePhases = new Set([
+  "current",
+  "available",
+  "downloaded",
+  "installing",
+  "ready",
+  "error",
 ]);
 
 const emptySnapshot: AppSnapshot = {
@@ -75,6 +98,11 @@ const emptyRuntime: RuntimeStatus = {
   runtimeLogPath: "—",
   modelsDirectory: "—",
   modelsServerExposed: false,
+  installStep: 0,
+  installStepTotal: 0,
+  installStepLabel: "",
+  freeBytes: 0,
+  requiredBytes: 0,
   message: "Verifica del runtime…",
 };
 
@@ -98,7 +126,15 @@ function App() {
   const [dropActive, setDropActive] = useState(false);
   const [starting, setStarting] = useState(false);
   const [runtimeBusy, setRuntimeBusy] = useState(false);
+  const [cancellingInstall, setCancellingInstall] = useState(false);
+  const [welcomePostponed, setWelcomePostponed] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [noticeHeld, setNoticeHeld] = useState(false);
+  const [sectionAnnouncement, setSectionAnnouncement] = useState("");
+  const [jobAnnouncement, setJobAnnouncement] = useState("");
+  const [failureAnnouncement, setFailureAnnouncement] = useState("");
+  const [runtimeAnnouncement, setRuntimeAnnouncement] = useState("");
+  const [updateAnnouncement, setUpdateAnnouncement] = useState("");
   const inspectingRef = useRef(false);
 
   const addQuickPaths = useCallback(async (paths: string[]) => {
@@ -221,38 +257,145 @@ function App() {
     };
   }, []);
 
-  // A toast that never leaves covers the corner of the window for the rest of
-  // the session; errors linger longer than confirmations because they are read.
+  // A toast that never leaves covers the corner of the window for the rest of the
+  // session, so confirmations expire. Errors do not: the reason a file was
+  // rejected is the only record of it, and twelve seconds was not enough to read
+  // four reasons. Hovering or focusing the toast holds it, which is what makes a
+  // long list readable at all; leaving restarts the countdown from the top.
   useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(
-      () => setNotice(null),
-      notice.tone === "error" ? 12_000 : 6_000,
-    );
+    if (!notice || notice.tone === "error" || noticeHeld) return;
+    const timer = window.setTimeout(() => setNotice(null), 6_000);
     return () => window.clearTimeout(timer);
-  }, [notice]);
+  }, [notice, noticeHeld]);
 
   const hasActiveJobs = snapshot.jobs.some((job) => activeJobStates.has(job.status));
-
-  // The end of a job is the moment that matters most and it happens off-screen
-  // whenever the user is not on Attività. Announcing the tally — rather than
-  // every tick — keeps the region useful instead of chatty.
-  const jobAnnouncement = useMemo(() => {
-    if (hasActiveJobs) return "";
-    const completed = snapshot.jobs.filter((job) => job.status === "completed").length;
-    const failed = snapshot.jobs.filter((job) => job.status === "failed").length;
-    if (!completed && !failed) return "";
-    const parts = [
-      completed ? `${completed} ${completed === 1 ? "lavoro completato" : "lavori completati"}` : null,
-      failed ? `${failed} non ${failed === 1 ? "riuscito" : "riusciti"}` : null,
-    ].filter(Boolean);
-    return `Coda vuota. ${parts.join(", ")}.`;
-  }, [hasActiveJobs, snapshot.jobs]);
-
   const updater = useAppUpdater(hasActiveJobs);
   const showUpdateBanner =
     !updater.dismissed &&
     ["available", "downloading", "downloaded", "installing", "ready"].includes(updater.phase);
+
+  // Jobs whose outcome this session is responsible for announcing. Built from the
+  // ids the core just returned, never from `list_jobs`: that is a window capped at
+  // a few hundred rows, so deriving the batch from it would announce history.
+  const watchedJobsRef = useRef<Set<string>>(new Set());
+  const jobStatusRef = useRef<Map<string, string>>(new Map());
+
+  // The end of a job is the moment that matters most and it happens off-screen
+  // whenever the user is not on Attività. Diffing two polls turns it into one
+  // sentence per file, with failures on the assertive region so they are not
+  // queued behind a confirmation.
+  useEffect(() => {
+    const watched = watchedJobsRef.current;
+    if (!watched.size) return;
+    const previousStatuses = jobStatusRef.current;
+    const polite: string[] = [];
+    const urgent: string[] = [];
+    let completed = 0;
+    let failed = 0;
+    let pending = 0;
+    let observed = 0;
+
+    for (const job of snapshot.jobs) {
+      if (!watched.has(job.id)) continue;
+      observed += 1;
+      const previous = previousStatuses.get(job.id);
+      previousStatuses.set(job.id, job.status);
+      if (activeJobStates.has(job.status)) {
+        pending += 1;
+        continue;
+      }
+      if (job.status === "completed") completed += 1;
+      if (job.status === "failed") failed += 1;
+      if (previous === job.status) continue;
+      if (job.status === "completed") {
+        polite.push(
+          job.warnings.length
+            ? announce.jobCompletedWithWarnings(job.inputName, job.warnings[0])
+            : announce.jobCompleted(job.inputName),
+        );
+      } else if (job.status === "failed") {
+        urgent.push(
+          announce.jobFailed(
+            job.inputName,
+            job.error ? describeError(job.error) : "motivo non riportato",
+          ),
+        );
+      } else if (job.status === "cancelled") {
+        polite.push(announce.jobCancelled(job.inputName));
+      } else if (job.status === "interrupted") {
+        urgent.push(announce.jobInterrupted(job.inputName));
+      }
+    }
+
+    const finished = observed === watched.size && pending === 0;
+    if (finished && watched.size > 1) polite.push(announce.batchDone(completed, failed));
+    if (polite.length) setJobAnnouncement(polite.join(" "));
+    if (urgent.length) setFailureAnnouncement(urgent.join(" "));
+    if (finished) {
+      watched.clear();
+      previousStatuses.clear();
+    }
+  }, [snapshot.jobs]);
+
+  // Install phases arrive from a four-second poll, so the announcement is tied to
+  // the phase number rather than to the poll: one sentence per phase.
+  const installStepRef = useRef(0);
+  useEffect(() => {
+    if (!runtime.installing) {
+      installStepRef.current = 0;
+      return;
+    }
+    if (runtime.installStepTotal > 0 && runtime.installStep > installStepRef.current) {
+      installStepRef.current = runtime.installStep;
+      setRuntimeAnnouncement(
+        announce.installStep(
+          runtime.installStep,
+          runtime.installStepTotal,
+          runtime.installStepLabel,
+        ),
+      );
+    }
+  }, [
+    runtime.installing,
+    runtime.installStep,
+    runtime.installStepTotal,
+    runtime.installStepLabel,
+  ]);
+
+  const updateThresholdRef = useRef(0);
+  useEffect(() => {
+    if (updater.phase !== "downloading") {
+      updateThresholdRef.current = 0;
+      if (announcedUpdatePhases.has(updater.phase)) {
+        setUpdateAnnouncement(
+          updatePhaseStatus(updater.phase, updater.availableVersion, updater.progress),
+        );
+      }
+      return;
+    }
+    if (updater.progress === null) return;
+    const reached = updateAnnouncementThresholds.filter(
+      (threshold) => threshold <= (updater.progress ?? 0),
+    );
+    const crossed = reached.length ? reached[reached.length - 1] : 0;
+    if (crossed > updateThresholdRef.current) {
+      updateThresholdRef.current = crossed;
+      setUpdateAnnouncement(announce.updateProgress(crossed));
+    }
+  }, [updater.phase, updater.progress, updater.availableVersion]);
+
+  // Changing view left the focus on the sidebar button, so the next Tab walked
+  // through the navigation again instead of entering the view that had just
+  // opened. The first mount is skipped: nothing has changed yet.
+  const firstViewRef = useRef(true);
+  useEffect(() => {
+    if (firstViewRef.current) {
+      firstViewRef.current = false;
+      return;
+    }
+    document.getElementById("main-content")?.focus();
+    setSectionAnnouncement(announce.section(sectionTitles[active]));
+  }, [active]);
 
   useEffect(() => {
     if (!isTauri() || !hasActiveJobs) return;
@@ -348,6 +491,8 @@ function App() {
         options,
       });
       setSnapshot(report.snapshot);
+      watchedJobsRef.current = new Set(report.jobIds);
+      jobStatusRef.current.clear();
       if (quickPaths.length) {
         const startedPaths = new Set(quickPaths);
         setQuickItems((current) => current.filter((item) => !startedPaths.has(item.path)));
@@ -408,9 +553,18 @@ function App() {
   }
 
   async function handleRetry(jobId: string) {
+    const knownJobIds = new Set(snapshot.jobs.map((job) => job.id));
     try {
       const current = await invoke<AppSnapshot>("retry_job", { jobId });
       setSnapshot(current);
+      // A retry inserts a new row, so its id is whatever the returned snapshot
+      // has that the previous one did not. Reading it from the response is safe
+      // precisely because the row was just written.
+      const fresh = current.jobs
+        .filter((job) => !knownJobIds.has(job.id))
+        .map((job) => job.id);
+      watchedJobsRef.current = new Set(fresh);
+      jobStatusRef.current.clear();
       setNotice({
         tone: "success",
         title: "Lavoro rimesso in coda",
@@ -464,6 +618,52 @@ function App() {
     }
   }
 
+  const handleLoadEvents = useCallback(async (jobId: string): Promise<JobEvent[]> => {
+    try {
+      return await invoke<JobEvent[]>("list_job_events", { jobId });
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        title: jobHistory.failedTitle,
+        detail: describeError(error),
+      });
+      return [];
+    }
+  }, []);
+
+  async function handleCopyHistory(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setNotice({
+        tone: "success",
+        title: jobHistory.copied,
+        detail: jobHistory.copiedDetail,
+      });
+    } catch {
+      setNotice({
+        tone: "error",
+        title: jobHistory.copyFailedTitle,
+        detail: jobHistory.copyFailedDetail,
+      });
+    }
+  }
+
+  async function handleOpenLicense() {
+    try {
+      await invoke("reveal_license");
+    } catch (error) {
+      setNotice({ tone: "error", title: license.licenseError, detail: describeError(error) });
+    }
+  }
+
+  async function handleOpenRepository() {
+    try {
+      await invoke("open_source_repository");
+    } catch (error) {
+      setNotice({ tone: "error", title: license.repositoryError, detail: describeError(error) });
+    }
+  }
+
   async function handleRuntimeAction() {
     if (runtimeBusy) return;
     const starting = runtime.installed;
@@ -486,6 +686,28 @@ function App() {
       setNotice({ tone: "error", title: "Motori non disponibili", detail: describeError(error) });
     } finally {
       setRuntimeBusy(false);
+    }
+  }
+
+  async function handleCancelInstall() {
+    if (cancellingInstall) return;
+    setCancellingInstall(true);
+    try {
+      const next = await invoke<RuntimeStatus>("cancel_engine_install");
+      setRuntime(next);
+      setNotice({
+        tone: "success",
+        title: "Installazione annullata",
+        detail: "Nulla di già installato è stato rimosso: puoi riprendere quando vuoi da Modelli.",
+      });
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        title: "Annullamento non riuscito",
+        detail: describeError(error),
+      });
+    } finally {
+      setCancellingInstall(false);
     }
   }
 
@@ -527,17 +749,12 @@ function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   });
 
+  // Without the engines nothing can be processed, so the dashboard's "Elabora
+  // subito" led to a disabled button two screens later. The welcome screen takes
+  // its place until they exist or the user postpones them for this session.
+  const showWelcome = isTauri() && !runtime.installed && !welcomePostponed;
+
   function renderView() {
-    if (active === "home") {
-      return (
-        <Dashboard
-          onImport={() => void handleImport()}
-          onNavigate={setActive}
-          onQuickPick={() => void handleQuickPick()}
-          snapshot={snapshot}
-        />
-      );
-    }
     if (active === "library") {
       return (
         <LibraryView
@@ -555,6 +772,7 @@ function App() {
           onImport={() => void handleImport()}
           onQuickPick={() => void handleQuickPick()}
           onClearQuick={() => setQuickItems([])}
+          onNavigate={setActive}
           onStart={(itemIds, quickPaths, options) =>
             void handleStart(itemIds, quickPaths, options)
           }
@@ -569,7 +787,9 @@ function App() {
           jobs={snapshot.jobs}
           onCancel={(jobId) => void handleCancel(jobId)}
           onCancelAll={() => void handleCancelAll()}
+          onCopyHistory={(text) => void handleCopyHistory(text)}
           onExport={(jobIds) => void handleExport(jobIds)}
+          onLoadEvents={handleLoadEvents}
           onRetry={(jobId) => void handleRetry(jobId)}
           onReveal={(jobId) => void handleReveal(jobId)}
         />
@@ -580,7 +800,9 @@ function App() {
         <ModelsView
           bridge={snapshot.bridge}
           busy={runtimeBusy}
+          cancellingInstall={cancellingInstall}
           hasActiveJobs={hasActiveJobs}
+          onCancelInstall={() => void handleCancelInstall()}
           onDownloadModel={(engineId) => void handleDownloadModel(engineId)}
           onOpenLog={(path) => void handleRevealPath(path)}
           onRuntimeAction={() => void handleRuntimeAction()}
@@ -592,10 +814,35 @@ function App() {
     }
     if (active === "settings") {
       return (
-        <SettingsView hasActiveJobs={hasActiveJobs} snapshot={snapshot} updater={updater} />
+        <SettingsView
+          hasActiveJobs={hasActiveJobs}
+          onOpenLicense={() => void handleOpenLicense()}
+          onOpenRepository={() => void handleOpenRepository()}
+          snapshot={snapshot}
+          updater={updater}
+        />
       );
     }
-    return <PlaceholderView onNavigate={setActive} section={active} />;
+    if (showWelcome) {
+      return (
+        <WelcomeView
+          busy={runtimeBusy}
+          cancelling={cancellingInstall}
+          onCancelInstall={() => void handleCancelInstall()}
+          onInstall={() => void handleRuntimeAction()}
+          onPostpone={() => setWelcomePostponed(true)}
+          runtime={runtime}
+        />
+      );
+    }
+    return (
+      <Dashboard
+        onImport={() => void handleImport()}
+        onNavigate={setActive}
+        onQuickPick={() => void handleQuickPick()}
+        snapshot={snapshot}
+      />
+    );
   }
 
   return (
@@ -620,7 +867,7 @@ function App() {
         />
         <main aria-busy={loading} className="main-content" id="main-content" tabIndex={-1}>
           {loading ? (
-            <div className="loading-state" role="status">
+            <div className="loading-state">
               <span className="loading-mark">L/AI</span>
               <strong>Preparazione del workspace locale…</strong>
             </div>
@@ -631,13 +878,19 @@ function App() {
       </div>
 
       {/* Mounted unconditionally: a live region inserted together with its text
-          is not announced, because assistive technology never saw it empty. */}
+          is not announced, because assistive technology never saw it empty.
+          Errors switch it to `alert`, so a failed batch is not read after the
+          confirmation that queued it. */}
       <div
-        aria-live="polite"
+        aria-live={notice?.tone === "error" ? "assertive" : "polite"}
         className={`toast${showUpdateBanner ? " toast-raised" : ""}`}
         data-tone={notice?.tone}
         data-visible={Boolean(notice)}
-        role="status"
+        onBlur={() => setNoticeHeld(false)}
+        onFocus={() => setNoticeHeld(true)}
+        onMouseEnter={() => setNoticeHeld(true)}
+        onMouseLeave={() => setNoticeHeld(false)}
+        role={notice?.tone === "error" ? "alert" : "status"}
       >
         {notice ? (
           <>
@@ -674,7 +927,7 @@ function App() {
         />
       ) : null}
       {dropActive ? (
-        <div className="drop-overlay" role="status">
+        <div className="drop-overlay" aria-hidden="true">
           <div>
             <FileUp size={34} />
             <strong>Rilascia per elaborare</strong>
@@ -682,13 +935,33 @@ function App() {
           </div>
         </div>
       ) : null}
-      {/* Two regions, not one: sharing a node made every file drop re-announce
-          the job tally, because the text changed for an unrelated reason. */}
+      {/* One region per subject, all mounted from the first render. Sharing a node
+          made every file drop re-announce the job tally, because the text changed
+          for an unrelated reason; and a region that appears with its text — as
+          the models-server warning used to — is never announced at all. */}
       <span aria-live="polite" className="sr-only" role="status">
-        {inspecting ? "Lettura dei file in corso" : ""}
+        {loading ? announce.loading : sectionAnnouncement}
+      </span>
+      <span aria-live="polite" className="sr-only" role="status">
+        {inspecting ? announce.reading : ""}
+      </span>
+      <span aria-live="polite" className="sr-only" role="status">
+        {dropActive ? announce.dropping : ""}
+      </span>
+      <span aria-live="polite" className="sr-only" role="status">
+        {runtime.modelsServerExposed ? announce.modelsServerExposed : ""}
+      </span>
+      <span aria-live="polite" className="sr-only" role="status">
+        {runtimeAnnouncement}
+      </span>
+      <span aria-live="polite" className="sr-only" role="status">
+        {updateAnnouncement}
       </span>
       <span aria-live="polite" className="sr-only" role="status">
         {jobAnnouncement}
+      </span>
+      <span aria-live="assertive" className="sr-only" role="alert">
+        {failureAnnouncement}
       </span>
     </div>
   );

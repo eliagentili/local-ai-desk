@@ -1,7 +1,7 @@
 import { File, Filter, Search, Trash2 } from "lucide-react";
 import { useState } from "react";
 
-import { formatBytes, formatDate } from "../lib/format";
+import { foldForSearch, formatBytes, formatDate } from "../lib/format";
 import type { LibraryItem } from "../types";
 
 interface LibraryViewProps {
@@ -12,10 +12,10 @@ interface LibraryViewProps {
 
 export function LibraryView({ items, onImport, onRemove }: LibraryViewProps) {
   const [query, setQuery] = useState("");
-  const normalized = query.trim().toLocaleLowerCase("it");
+  const normalized = foldForSearch(query.trim());
   const visibleItems = normalized
     ? items.filter((item) =>
-        `${item.name} ${item.kind}`.toLocaleLowerCase("it").includes(normalized),
+        foldForSearch(`${item.name} ${item.kind}`).includes(normalized),
       )
     : items;
 

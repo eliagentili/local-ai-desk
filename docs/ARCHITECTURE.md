@@ -27,7 +27,9 @@ Il database contiene quattro insiemi:
 - `library_items`: riferimenti ai file originali, tipo, dimensione e hash;
 - `jobs`: workflow, stato, avanzamento, fase, output ed errore;
 - `job_events`: transizioni persistenti della coda;
-- `settings`: preferenze versionabili.
+- `settings`: tabella creata per le preferenze e **non ancora usata**: nella 1.0
+  l'unica preferenza dell'utente — il controllo automatico degli aggiornamenti —
+  vive nel `localStorage` della finestra, non qui.
 
 I file non vengono copiati durante l'importazione. L'hash viene calcolato con
 buffer da 8 MB, quindi il costo di memoria resta limitato anche per video da
@@ -40,7 +42,7 @@ Il worker riceve il file in streaming dentro una directory temporanea che viene
 rimossa al completamento, dopo un errore e in seguito a un annullamento. Soltanto
 il risultato atomico resta nel contenitore dell'app.
 
-## Runtime desktop 0.4
+## Runtime desktop
 
 Il core Rust interroga ed esegue lavori esclusivamente su
 `http://127.0.0.1:8787`, con timeout e URL non configurabile dall’interfaccia.
@@ -63,13 +65,8 @@ modello gia' presente e sposta lo store privato delle versioni precedenti invece
 di riscaricarlo. Un `OLLAMA_MODELS` impostato dall'utente ha sempre la
 precedenza: chi ha spostato i modelli su un disco esterno ha gia' deciso.
 
-Il checkpoint del Privacy Filter (2,6 GB) non fa parte dell'installazione: lo
-scarica l'utente da Modelli quando gli serve. Arriva in una cartella di staging
-e viene spostato in posizione solo a download completo, perche' scrivendo
-direttamente nella destinazione `config.json` comparirebbe dopo pochi secondi e
-`engine_status` dichiarerebbe il motore pronto mentre i pesi stanno ancora
-arrivando. Fino ad allora Privacy Shield lavora sulle sole regole italiane e lo
-dichiara nel risultato.
+Il checkpoint del Privacy Filter non fa parte dell'installazione: il meccanismo è
+descritto sotto, in **Model pack**.
 
 Il processo resta invece nostro: l'app avvia il proprio server con la versione
 pinnata e `OLLAMA_HOST=127.0.0.1`, e lo supervisiona. Se ne trova gia' uno in
@@ -125,13 +122,36 @@ dopo il salvataggio non può bloccare un lavoro concluso. Da `failed`,
 `cancelled` e `interrupted` si può tornare in `queued` soltanto con un riavvio
 esplicito dell'utente, possibile quando la fonte è in Libreria.
 
-`paused` non esiste ancora: pausa e ripresa sono in [roadmap](ROADMAP.md) F1.
+`paused` non esiste: pausa e ripresa sono dichiarate fuori dalla 1.0 nella
+[roadmap](ROADMAP.md). Un lavoro si annulla e si riavvia da capo.
 
 Ogni transizione è atomica e accompagnata da un evento persistente in
-`job_events`, potato a 200 eventi per lavoro all'avvio. La percentuale è
-deterministica quando il motore fornisce unità di lavoro (pagine, segmenti,
-chunk); altrimenti la UI mostra una fase indeterminata senza inventare un
-numero.
+`job_events`, potato a 200 eventi per lavoro all'avvio, ed è leggibile
+dall'interfaccia: Attività apre la cronologia di ogni lavoro con orario, stato,
+fase e messaggio. La percentuale è deterministica quando il motore fornisce unità
+di lavoro (pagine, segmenti, chunk); altrimenti la UI mostra una fase
+indeterminata senza inventare un numero.
+
+Uscire da un lavoro è garantito su tre fronti. Un output assente, vuoto o di soli
+spazi è un errore prima che venga creata una cartella o scritto un file, sia nel
+core sia in ogni motore. L'annullamento termina il processo figlio del motore —
+markitdown, docling e Privacy Shield girano fuori dal processo del server proprio
+perché una chiamata bloccante in un thread non è interrompibile e il semaforo di
+`privacy` vale 1. E un tetto di durata per lavoro, dodici ore per default,
+trasforma un motore vivo ma bloccato in un errore azionabile invece di una riga
+che resta `running` per sempre. Se la scrittura dello stato finale fallisce viene
+ritentata, e in ultima istanza la riga è riconciliata a `interrupted` al riavvio
+successivo.
+
+Lo schema del database dichiara la propria versione in `PRAGMA user_version`. Le
+migrazioni sono solo additive, quindi una versione più vecchia dell'app apre un
+archivio più nuovo; il contrario è rifiutato con un messaggio azionabile, perché
+leggere a metà i dati di chi ha fatto un downgrade è peggio che dirlo.
+
+L'app scrive un proprio log locale, in append e con rotazione, con un hook sui
+panic concatenato al precedente, il tempo trascorso fino al primo snapshot pronto
+e un marcatore di chiusura pulita: è ciò che rende misurabili crash-free rate e
+tempo di avvio.
 
 ## Confini di sicurezza
 
@@ -143,7 +163,16 @@ numero.
 - token casuale per sessione fra core e motori: il backend su `127.0.0.1:8787`
   rifiuta ogni richiesta priva del token e ogni richiesta con header `Origin`,
   quindi nessun'altra applicazione — né una pagina aperta nel browser — può
-  inviargli documenti o interromperne i lavori;
+  inviargli documenti o interromperne i lavori. Il token vive solo in memoria e
+  nelle variabili d'ambiente del figlio: non viene scritto su disco, e può essere
+  imposto dall'ambiente soltanto nelle build di debug;
+- se all'avvio la porta dei motori è già occupata, il core adotta quel processo
+  **solo** se risponde al token di questo avvio; altrimenti rifiuta con un
+  messaggio azionabile invece di parlare con un server sconosciuto;
+- la superficie HTTP dei motori non espone documentazione interattiva
+  (`/docs`, `/redoc`, `/openapi.json` rispondono 404), il log di accesso è
+  disattivato e il nome del documento viaggia in un header, non nell'URL: il nome
+  dei file dell'utente non finisce nei log;
 - alla chiusura l'app termina l'intero process group dei motori, prima con
   SIGTERM e poi a forza: nessun worker di traduzione sopravvive alla finestra;
 - il motore sorveglia a sua volta l'app che lo ha avviato e si spegne entro
@@ -158,4 +187,13 @@ numero.
   programma;
 - i file di lavoro rimasti da una sessione interrotta vengono rimossi all'avvio
   successivo, insieme ai risultati `.partial` incompleti;
-- futuro download dei pack con firma, checksum e manifest bloccato per versione.
+- gli asset del bootstrap (uv, il binario di Ollama, il sorgente del Privacy
+  Filter) sono fissati per SHA-256 e verificati prima dell'uso, e i pacchetti
+  Python installati con `--require-hashes` dai lock per piattaforma. **I pesi dei
+  modelli non sono ancora fissati per revisione**: arrivano per tag dal registro
+  Ollama e da Hugging Face, dove manifest e layer sono content-addressed ma il tag
+  è mutabile. È un limite dichiarato in [LICENSING.md](LICENSING.md);
+- gli aggiornamenti dell'app sono firmati Ed25519 e la firma è verificata prima
+  dell'installazione. **Il pacchetto scaricato dal sito non è firmato con un
+  certificato di sistema**: la garanzia è il checksum firmato pubblicato con la
+  release, non Gatekeeper. Vedi [THREAT_MODEL.md](THREAT_MODEL.md).

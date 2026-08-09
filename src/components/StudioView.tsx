@@ -1,77 +1,45 @@
 import {
+  ArrowUpRight,
   Check,
   FileSearch,
   Languages,
   Mic2,
+  PlugZap,
   ScanText,
   ShieldCheck,
   Sparkles,
   UploadCloud,
 } from "lucide-react";
+import type { ComponentType } from "react";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 
-import { engineName, formatBytes } from "../lib/format";
+import { foldForSearch, formatBytes } from "../lib/format";
+import {
+  engineGate,
+  engineName,
+  intentDescriptions,
+  intentFormats,
+  intentLabels,
+  intentOrder,
+  languageNames,
+} from "../lib/strings";
 import type {
   BridgeStatus,
   LibraryItem,
+  SectionId,
   WorkflowIntent,
   WorkflowOptions,
 } from "../types";
 
-const intents = [
-  {
-    id: "extract" as const,
-    label: "Estrai con Auto",
-    description: "Auto distingue documento digitale, scansione e formato Office.",
-    icon: Sparkles,
-  },
-  {
-    id: "translate" as const,
-    label: "Traduci PDF",
-    description: "Traduzione locale con layout originale o versione bilingue.",
-    icon: Languages,
-  },
-  {
-    id: "ocr" as const,
-    label: "Forza OCR",
-    description: "Analizza ogni pagina o immagine con PaddleOCR.",
-    icon: ScanText,
-  },
-  {
-    id: "transcribe" as const,
-    label: "Trascrivi",
-    description: "Audio e video in testo, sottotitoli o JSON.",
-    icon: Mic2,
-  },
-  {
-    id: "privacy" as const,
-    label: "Proteggi dati",
-    description: "Rileva e maschera dati personali nei file testuali.",
-    icon: ShieldCheck,
-  },
-];
+const intentIcons: Record<WorkflowIntent, ComponentType<{ size?: number }>> = {
+  extract: Sparkles,
+  translate: Languages,
+  ocr: ScanText,
+  transcribe: Mic2,
+  privacy: ShieldCheck,
+};
 
-const languages = [
-  ["auto", "Rileva automaticamente"],
-  ["en", "Inglese"],
-  ["it", "Italiano"],
-  ["es", "Spagnolo"],
-  ["fr", "Francese"],
-  ["de", "Tedesco"],
-  ["pt", "Portoghese"],
-  ["nl", "Olandese"],
-  ["pl", "Polacco"],
-  ["ru", "Russo"],
-  ["uk", "Ucraino"],
-  ["ar", "Arabo"],
-  ["zh-CN", "Cinese semplificato"],
-  ["ja", "Giapponese"],
-  ["ko", "Coreano"],
-  ["hi", "Hindi"],
-  ["tr", "Turco"],
-] as const;
-
-const translationLanguages = languages.filter(([value]) => value !== "auto");
+const translationLanguages = languageNames.filter(([value]) => value !== "auto");
 
 /** Engine that has to be ready for an intent to produce a real result. `extract`
  *  routes at run time and `privacy` degrades to local rules, so neither is here. */
@@ -79,28 +47,6 @@ const intentEngine: Partial<Record<WorkflowIntent, string>> = {
   translate: "pdf-translate",
   ocr: "paddleocr",
   transcribe: "faster-whisper",
-};
-
-const intentFormats: Record<WorkflowIntent, Array<[string, string]>> = {
-  extract: [
-    ["markdown", "Markdown"],
-    ["txt", "Testo semplice"],
-  ],
-  translate: [["pdf", "PDF"]],
-  ocr: [
-    ["markdown", "Markdown"],
-    ["txt", "Testo semplice"],
-    ["json", "JSON strutturato"],
-  ],
-  transcribe: [
-    ["txt", "Testo semplice"],
-    ["srt", "Sottotitoli SRT"],
-    ["json", "JSON con segmenti"],
-  ],
-  privacy: [
-    ["txt", "Testo protetto"],
-    ["json", "JSON con rilevamenti"],
-  ],
 };
 
 function fileExtension(path: string): string {
@@ -143,6 +89,7 @@ interface StudioViewProps {
   onImport: () => void;
   onQuickPick: () => void;
   onClearQuick: () => void;
+  onNavigate: (section: SectionId) => void;
   onStart: (itemIds: string[], quickPaths: string[], options: WorkflowOptions) => void;
   quickItems: LibraryItem[];
 }
@@ -154,6 +101,7 @@ export function StudioView({
   onImport,
   onQuickPick,
   onClearQuick,
+  onNavigate,
   onStart,
   quickItems,
 }: StudioViewProps) {
@@ -167,7 +115,7 @@ export function StudioView({
   const [translationMode, setTranslationMode] = useState<"translated" | "bilingual">(
     "translated",
   );
-  const deferredQuery = useDeferredValue(query.trim().toLocaleLowerCase("it"));
+  const deferredQuery = useDeferredValue(foldForSearch(query.trim()));
   const allItems = useMemo(() => [...quickItems, ...items], [items, quickItems]);
   const itemById = useMemo(
     () => new Map(allItems.map((item) => [item.id, item])),
@@ -180,7 +128,7 @@ export function StudioView({
   const visible = useMemo(
     () =>
       compatible.filter((item) =>
-        `${item.name} ${item.kind}`.toLocaleLowerCase("it").includes(deferredQuery),
+        foldForSearch(`${item.name} ${item.kind}`).includes(deferredQuery),
       ),
     [compatible, deferredQuery],
   );
@@ -195,6 +143,10 @@ export function StudioView({
   const engineBlocked = Boolean(
     bridge.available && requiredEngine && requiredEngine.state !== "ready",
   );
+  const blockedMessage =
+    engineBlocked && requiredEngine
+      ? `${engineName(requiredEngine.id)} non è pronto: ${requiredEngine.label}. Completa l’installazione da Modelli prima di avviare questo tipo di lavoro.`
+      : null;
 
   // Auto-select each dropped file exactly once. Re-running the selection on
   // every render kept undoing the user's own deselection.
@@ -282,30 +234,46 @@ export function StudioView({
             parser; traduzione, OCR e trascrizione usano invece il relativo motore locale.
           </p>
         </div>
-        <span className="large-status" data-ready={bridge.available}>
-          <span className="status-dot" />
-          {bridge.available
-            ? `fino a ${bridge.batchParallelism} lavori in parallelo`
-            : "motori non avviati"}
-        </span>
+        {bridge.available ? (
+          <span className="large-status" data-ready>
+            <span className="status-dot" />
+            fino a {bridge.batchParallelism} lavori in parallelo
+          </span>
+        ) : null}
       </section>
 
+      {/* A chip that only stated "motori non avviati" left the user in front of a
+          disabled button with nowhere to go: this block is the way out. */}
+      {bridge.available ? null : (
+        <button className="engine-gate" onClick={() => onNavigate("models")} type="button">
+          <span className="engine-gate-icon" aria-hidden="true"><PlugZap size={20} /></span>
+          <span>
+            <strong>{engineGate.title}</strong>
+            <small>{engineGate.detail}</small>
+          </span>
+          <span className="engine-gate-action">
+            {engineGate.action}
+            <ArrowUpRight size={15} />
+          </span>
+        </button>
+      )}
+
       <section className="intent-grid" aria-label="Scegli il risultato">
-        {intents.map((item) => {
-          const Icon = item.icon;
+        {intentOrder.map((id) => {
+          const Icon = intentIcons[id];
           return (
             <button
-              aria-pressed={intent === item.id}
+              aria-pressed={intent === id}
               className="intent-card"
-              data-active={intent === item.id}
-              key={item.id}
-              onClick={() => chooseIntent(item.id)}
+              data-active={intent === id}
+              key={id}
+              onClick={() => chooseIntent(id)}
               type="button"
             >
               <span className="intent-icon"><Icon size={19} /></span>
-              <strong>{item.label}</strong>
-              <p>{item.description}</p>
-              {intent === item.id ? <Check className="intent-check" size={15} /> : null}
+              <strong>{intentLabels[id]}</strong>
+              <p>{intentDescriptions[id]}</p>
+              {intent === id ? <Check className="intent-check" size={15} /> : null}
             </button>
           );
         })}
@@ -404,7 +372,7 @@ export function StudioView({
 
         <div className="surface-panel workflow-config">
           <span className="eyebrow">Configurazione</span>
-          <h3>{intents.find((item) => item.id === intent)?.label}</h3>
+          <h3>{intentLabels[intent]}</h3>
           <div className="config-fields">
             {intent === "translate" ? (
               <>
@@ -436,7 +404,7 @@ export function StudioView({
                   <SelectField
                     label="Lingua audio"
                     onChange={setLanguage}
-                    options={languages}
+                    options={languageNames}
                     value={language}
                   />
                 ) : null}
@@ -472,12 +440,13 @@ export function StudioView({
               ? "Preparazione del batch…"
               : `Avvia ${selected.size || ""} ${selected.size === 1 ? "lavoro" : "lavori"}`}
           </button>
-          {engineBlocked && requiredEngine ? (
-            <p className="config-blocked" role="status">
-              {engineName(requiredEngine.id)} non è pronto: {requiredEngine.label}.
-              Completa l’installazione da Modelli prima di avviare questo tipo di lavoro.
-            </p>
-          ) : null}
+          {blockedMessage ? <p className="config-blocked">{blockedMessage}</p> : null}
+          {/* The live region is mounted with the view and filled when the block
+              appears. Rendering region and text together, as before, meant
+              assistive technology never saw it empty and never announced it. */}
+          <span aria-live="polite" className="sr-only" role="status">
+            {blockedMessage ?? ""}
+          </span>
           <p className="config-note">
             Gli originali non vengono modificati. I file rapidi non entrano nel database;
             le copie di trasferimento vengono eliminate anche in caso di errore o annullamento.

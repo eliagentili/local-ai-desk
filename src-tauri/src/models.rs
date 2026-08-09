@@ -48,6 +48,19 @@ pub struct Job {
     pub updated_at: String,
 }
 
+/// One recorded transition of a job. The table behind it is append-only, so the
+/// sequence is the audit trail of what the engine actually did and when.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobEvent {
+    pub id: i64,
+    pub status: String,
+    pub progress: f64,
+    pub stage: String,
+    pub message: Option<String>,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BridgeStatus {
@@ -110,6 +123,16 @@ pub struct RuntimeStatus {
     /// documents still go to localhost — but the user's own configuration
     /// deserves to be visible rather than silently relied upon.
     pub models_server_exposed: bool,
+    /// Current bootstrap phase, taken from the `[n/total]` marker the install
+    /// scripts print. `0` means not known yet.
+    pub install_step: u32,
+    pub install_step_total: u32,
+    pub install_step_label: String,
+    /// Free space on the volume that holds the data directory, and the space the
+    /// install needs. Without these two numbers the user starts a download of
+    /// tens of gigabytes blind. `free_bytes` is `0` when it cannot be measured.
+    pub free_bytes: u64,
+    pub required_bytes: u64,
     pub message: String,
 }
 

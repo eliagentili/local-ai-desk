@@ -18,14 +18,30 @@ use tauri::State;
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
 use crate::{
+    app_log,
     database::{self, AppState, NewLibraryItem, ProgressUpdate},
     engine_bridge,
     models::{
-        AppSnapshot, BridgeStatus, EngineStatus, ExportReport, ImportReport, Job, JobSpec,
-        QuickFilesReport, RuntimeStatus, StartJobsReport, SystemSnapshot, WorkflowOptions,
+        AppSnapshot, BridgeStatus, EngineStatus, ExportReport, ImportReport, Job, JobEvent,
+        JobSpec, QuickFilesReport, RuntimeStatus, StartJobsReport, SystemSnapshot, WorkflowOptions,
     },
     process,
 };
+
+/// Port the local engine runtime listens on.
+const ENGINE_PORT: u16 = 8787;
+
+/// Free space the guided install needs before it starts downloading.
+///
+/// The runtime, the model packs and the translation model together exceed 20 GB,
+/// and the archives are unpacked next to themselves before being removed. The
+/// margin is what keeps the machine usable at the end instead of leaving the user
+/// with a full disk and an install that failed on the last step.
+const REQUIRED_INSTALL_BYTES: u64 = 35 * 1024 * 1024 * 1024;
+
+/// Where the source of this exact build can be read. The AGPL is only satisfied
+/// if the running app says where its own source is, so this points at the tag.
+const SOURCE_REPOSITORY: &str = "https://github.com/eliagentili/local-ai-desk";
 
 /// Engine logs are appended, never truncated: a crash loop must leave the
 /// traceback that caused it readable instead of overwriting it on every retry.
@@ -183,8 +199,83 @@ fn install_process_is_running(state: &AppState) -> bool {
     false
 }
 
+/// Line the app writes into the install log before each run, so the phase parser
+/// cannot mistake the last step of a previous install for the current one.
+const INSTALL_RUN_MARKER: &str = "=== nuova installazione ===";
+
+/// Current phase of an install, taken from the `[n/total] etichetta` lines the
+/// bootstrap scripts print. The last one wins, because the log is a sequence.
+///
+/// The scripts and this parser are one contract: renaming or renumbering a step
+/// on either side without the other leaves the user watching a wrong number.
+fn parse_install_step(log_tail: &str) -> Option<(u32, u32, String)> {
+    // Only the current run counts. When the marker is not in the window, the
+    // window is entirely inside the current run and all of it counts.
+    let region = match log_tail.rfind(INSTALL_RUN_MARKER) {
+        Some(position) => &log_tail[position + INSTALL_RUN_MARKER.len()..],
+        None => log_tail,
+    };
+    region.lines().rev().find_map(|line| {
+        let line = line.trim();
+        let (marker, label) = line.strip_prefix('[')?.split_once(']')?;
+        let (step, total) = marker.split_once('/')?;
+        let label = label.trim();
+        if label.is_empty() {
+            return None;
+        }
+        Some((
+            step.trim().parse::<u32>().ok()?,
+            total.trim().parse::<u32>().ok()?,
+            label.to_string(),
+        ))
+    })
+}
+
+/// Tail of a log as text, bounded so a log of any size costs the same to read.
+/// The bound is generous enough that a whole install run usually fits.
+fn log_tail_text(path: &Path, max_bytes: usize) -> String {
+    let Ok(raw) = fs::read(path) else {
+        return String::new();
+    };
+    let start = raw.len().saturating_sub(max_bytes);
+    String::from_utf8_lossy(&raw[start..]).into_owned()
+}
+
+/// Free bytes on the volume that holds `path`, or `None` when it cannot be told.
+///
+/// Reported as unknown rather than as zero: a wrong zero would refuse the install
+/// on a machine that has room, which is worse than not showing a number.
+fn free_bytes_for(path: &Path) -> Option<u64> {
+    use sysinfo::{DiskRefreshKind, Disks};
+    let disks = Disks::new_with_refreshed_list_specifics(DiskRefreshKind::nothing().with_storage());
+    // The data directory may not exist yet, and several mount points can be
+    // prefixes of the same path (`/` and `/Users` on macOS): the longest match is
+    // the volume the bytes will actually be written to.
+    disks
+        .list()
+        .iter()
+        .filter(|disk| path.starts_with(disk.mount_point()))
+        .max_by_key(|disk| disk.mount_point().as_os_str().len())
+        .map(|disk| disk.available_space())
+}
+
+/// Sizes in the unit the user reads on their own disk. One decimal is kept when
+/// it carries information, so "34,7 GB" against "35 GB" reads as the near miss
+/// it is instead of as the same number twice.
+fn format_gigabytes(bytes: u64) -> String {
+    let gigabytes = bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+    let tenths = (gigabytes * 10.0).round();
+    if gigabytes >= 100.0 || tenths % 10.0 == 0.0 {
+        format!("{gigabytes:.0} GB")
+    } else {
+        format!("{gigabytes:.1} GB").replace('.', ",")
+    }
+}
+
 fn loopback_runtime_available() -> bool {
-    let address = "127.0.0.1:8787".parse().expect("static socket address");
+    let address = format!("127.0.0.1:{ENGINE_PORT}")
+        .parse()
+        .expect("static socket address");
     std::net::TcpStream::connect_timeout(&address, Duration::from_millis(120)).is_ok()
 }
 
@@ -295,9 +386,24 @@ fn owned_ollama_pid(state: &AppState) -> String {
         .unwrap_or_default()
 }
 
+/// Refusal to send the user's documents to a listener we cannot recognise.
+const FOREIGN_LISTENER_MESSAGE: &str =
+    "La porta usata dai motori locali è occupata da un altro programma. Chiudilo, poi riavvia \
+     i motori da Modelli.";
+
 fn spawn_runtime_process(state: &AppState) -> Result<(), String> {
-    if loopback_runtime_available() || process_is_running(&state.runtime_process) {
+    if process_is_running(&state.runtime_process) {
         return Ok(());
+    }
+    // Something already holds the port. That it answers proves nothing about who
+    // it is: only accepting this launch's token does. A runtime we started
+    // ourselves in this session — or one started for development with the same
+    // token — is adopted; anything else is refused rather than handed documents.
+    if loopback_runtime_available() {
+        if engine_bridge::listener_speaks_our_token(ENGINE_PORT) {
+            return Ok(());
+        }
+        return Err(FOREIGN_LISTENER_MESSAGE.to_string());
     }
     let python = runtime_python(&state.engine_data_dir);
     if !python.is_file() {
@@ -384,14 +490,16 @@ pub(crate) fn try_start_installed_runtime(state: &AppState) {
 }
 
 /// The engine port answers but the listener is not a runtime we started and it
-/// does not accept our token: something else owns 8787.
+/// does not accept our token: something else owns it.
 fn foreign_engine_listener(state: &AppState, bridge_available: bool) -> bool {
     loopback_runtime_available() && !bridge_available && !process_is_running(&state.runtime_process)
 }
 
 /// Read-only: polled every few seconds by the UI, so it must never spawn or
 /// restart anything. Starting the runtime is `try_start_installed_runtime` at
-/// launch and `start_engine_runtime` on explicit request.
+/// launch and `start_engine_runtime` on explicit request. Reading the tail of a
+/// log and asking the volume for its free space are both safe here; spawning a
+/// process would turn each poll into the start of another install.
 #[tauri::command]
 pub async fn get_runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatus, String> {
     let bridge_available = bridge_status().await.available;
@@ -406,6 +514,10 @@ pub async fn get_runtime_status(state: State<'_, AppState>) -> Result<RuntimeSta
         .lock()
         .ok()
         .and_then(|result| result.clone());
+    let install_log = state.engine_data_dir.join("install.log");
+    let (install_step, install_step_total, install_step_label) =
+        parse_install_step(&log_tail_text(&install_log, 32_000)).unwrap_or((0, 0, String::new()));
+    let free_bytes = free_bytes_for(&state.data_dir).unwrap_or(0);
     Ok(RuntimeStatus {
         platform: match std::env::consts::OS {
             "macos" => "macOS".to_string(),
@@ -433,13 +545,21 @@ pub async fn get_runtime_status(state: State<'_, AppState>) -> Result<RuntimeSta
         models_server_exposed: !process_is_running(&state.ollama_process)
             && loopback_ollama_available()
             && listener_is_network_exposed(11434),
+        install_step,
+        install_step_total,
+        install_step_label,
+        free_bytes,
+        required_bytes: REQUIRED_INSTALL_BYTES,
         message: if running {
             "Motori locali attivi".to_string()
         } else if installing {
-            "Installazione dei componenti in corso".to_string()
+            if install_step_total > 0 {
+                format!("Installazione in corso, fase {install_step} di {install_step_total}")
+            } else {
+                "Installazione dei componenti in corso".to_string()
+            }
         } else if occupied {
-            "La porta 8787 è occupata da un altro programma. Chiudilo e riavvia i motori."
-                .to_string()
+            FOREIGN_LISTENER_MESSAGE.to_string()
         } else if installed {
             "Runtime installato, pronto per essere avviato".to_string()
         } else if let Some(result) = last_install_result {
@@ -481,18 +601,10 @@ fn log_tail(path: &Path, lines: usize) -> Option<String> {
 #[tauri::command]
 pub async fn start_engine_runtime(state: State<'_, AppState>) -> Result<RuntimeStatus, String> {
     spawn_runtime_process(state.inner())?;
-    // `spawn_runtime_process` returns Ok without starting anything when the
-    // port is already taken. If that listener is not ours, no amount of waiting
-    // will help, and blaming our own log would send the user down a dead end.
-    if !process_is_running(&state.runtime_process)
-        && loopback_runtime_available()
-        && !bridge_status().await.available
-    {
-        return Err(
-            "La porta 8787 è occupata da un altro programma. Chiudilo e riprova ad avviare i motori."
-                .to_string(),
-        );
-    }
+    // A runtime already on the port was adopted rather than started. Its log is
+    // not ours to blame, so the "it died on startup" branch below applies only to
+    // a child of this process.
+    let started_here = process_is_running(&state.runtime_process);
 
     // Wait for the engine to actually answer instead of assuming it will: the
     // user is told the truth, and a runtime that dies on startup surfaces the
@@ -502,7 +614,7 @@ pub async fn start_engine_runtime(state: State<'_, AppState>) -> Result<RuntimeS
         if bridge_status().await.available {
             return get_runtime_status(state).await;
         }
-        if !process_is_running(&state.runtime_process) {
+        if started_here && !process_is_running(&state.runtime_process) {
             let detail = log_tail(&state.engine_data_dir.join("runtime.log"), 3)
                 .unwrap_or_else(|| "nessun dettaglio nel log".to_string());
             return Err(format!(
@@ -511,7 +623,8 @@ pub async fn start_engine_runtime(state: State<'_, AppState>) -> Result<RuntimeS
         }
     }
     Err(
-        "I motori non hanno risposto entro 12 secondi. Controlla runtime.log da Modelli."
+        "I motori non hanno risposto entro 12 secondi. Apri Modelli e mostra il registro \
+         dei motori per vedere l'ultimo errore."
             .to_string(),
     )
 }
@@ -543,6 +656,18 @@ pub async fn install_engine_runtime(state: State<'_, AppState>) -> Result<Runtim
     if !cfg!(any(target_os = "macos", target_os = "windows")) {
         return Err("L’installazione guidata supporta macOS e Windows".to_string());
     }
+    // Checked before anything is downloaded. Finding out on the last of six
+    // phases costs the user the whole download and leaves the disk full.
+    if let Some(free) = free_bytes_for(&state.data_dir) {
+        if free < REQUIRED_INSTALL_BYTES {
+            return Err(format!(
+                "Per installare i motori servono almeno {} liberi sul disco, e adesso ce ne sono {}. \
+                 Libera spazio e riprova.",
+                format_gigabytes(REQUIRED_INSTALL_BYTES),
+                format_gigabytes(free),
+            ));
+        }
+    }
     fs::create_dir_all(&state.engine_data_dir).map_err(|error| error.to_string())?;
     // An installer started by a previous run may still be writing into the same
     // virtualenv. Running a second bootstrap on top of it corrupts both.
@@ -557,7 +682,15 @@ pub async fn install_engine_runtime(state: State<'_, AppState>) -> Result<Runtim
     }
     let log_path = state.engine_data_dir.join("install.log");
     rotate_log_if_large(&log_path);
-    let stdout = append_log(&log_path)?;
+    let mut stdout = append_log(&log_path)?;
+    // The log is appended across installs, so the phase parser needs to know
+    // where this run starts: without the marker the previous run's last step
+    // would be reported as the current one for the first minutes.
+    let _ = writeln!(
+        stdout,
+        "\n{INSTALL_RUN_MARKER} {}",
+        Local::now().format("%Y-%m-%dT%H:%M:%S")
+    );
     let stderr = stdout.try_clone().map_err(|error| error.to_string())?;
     let script = if cfg!(windows) {
         state
@@ -610,6 +743,56 @@ pub async fn install_engine_runtime(state: State<'_, AppState>) -> Result<Runtim
         .installer_process
         .lock()
         .map_err(|_| "Stato installazione non disponibile".to_string())? = Some(child);
+    get_runtime_status(state).await
+}
+
+/// Half-downloaded archives from an install that was stopped. Removing them frees
+/// the space the user is probably trying to reclaim, and stops a truncated archive
+/// from being mistaken for a complete one by the next attempt.
+///
+/// `jobs` is spared: it holds the uploads of work currently in flight, which has
+/// nothing to do with the install.
+fn clear_install_scratch(engine_data_dir: &Path) {
+    let Ok(entries) = fs::read_dir(engine_data_dir.join("work")) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.file_name() == "jobs" {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            let _ = fs::remove_dir_all(&path);
+        } else {
+            let _ = fs::remove_file(&path);
+        }
+    }
+}
+
+/// Stop an install in progress. Whatever is already installed stays installed:
+/// the next attempt reuses it, so cancelling costs the current download only.
+#[tauri::command]
+pub async fn cancel_engine_install(state: State<'_, AppState>) -> Result<RuntimeStatus, String> {
+    if !install_process_is_running(state.inner()) {
+        return Err(
+            "Non c'è nessuna installazione in corso da annullare. Aggiorna la pagina Modelli \
+             per vedere lo stato attuale."
+                .to_string(),
+        );
+    }
+    // The bootstrap scripts spawn their own downloads and package installs, so
+    // only the whole process group goes away together.
+    process::stop_process_tree(&state.installer_process);
+    process::forget_now(&state.engine_data_dir, "install");
+    clear_install_scratch(&state.engine_data_dir);
+    if let Ok(mut last_result) = state.last_install_result.lock() {
+        *last_result = Some(
+            "Installazione annullata. Quello che era già stato installato resta al suo posto: \
+             riavviala quando vuoi."
+                .to_string(),
+        );
+    }
+    app_log::record("installazione annullata dall'utente");
     get_runtime_status(state).await
 }
 
@@ -897,7 +1080,11 @@ fn inspect_quick_paths(paths: Vec<String>) -> (Vec<crate::models::LibraryItem>, 
 
 #[tauri::command]
 pub async fn bootstrap_snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
-    snapshot(state.database_path.clone(), state.data_dir.clone()).await
+    let snapshot = snapshot(state.database_path.clone(), state.data_dir.clone()).await;
+    // The first snapshot is the moment the app is actually usable, which is what
+    // "startup time" has to mean if the number is to be worth measuring.
+    app_log::record_ready();
+    snapshot
 }
 
 #[tauri::command]
@@ -1533,6 +1720,79 @@ pub async fn download_engine_model(engine_id: String) -> Result<(), String> {
         .unwrap_or_else(|| "Download del modello non avviato".to_string()))
 }
 
+/// Transitions of one job, oldest first. The rows were already being written on
+/// every state change; this is what finally lets the user read them.
+#[tauri::command]
+pub async fn list_job_events(
+    job_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<JobEvent>, String> {
+    let database_path = state.database_path.clone();
+    tauri::async_runtime::spawn_blocking(move || database::list_job_events(&database_path, &job_id))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|_| "Cronologia del lavoro non disponibile: riprova fra un istante.".to_string())
+}
+
+/// Show the licence that ships inside the app.
+///
+/// The AGPL is only conveyed if the copy travels with the binary, so the file
+/// lives in the bundle resources and this is how the user reaches it.
+#[tauri::command]
+pub async fn reveal_license(state: State<'_, AppState>) -> Result<(), String> {
+    let resource_dir = state
+        .engine_resource_dir
+        .parent()
+        .ok_or_else(|| "Risorse dell'app non disponibili".to_string())?;
+    let license = resource_dir.join("LICENSE");
+    if !license.is_file() {
+        return Err(
+            "Il file della licenza non è presente in questa copia dell'app. Puoi leggerlo \
+             nel repository del progetto, dal pulsante accanto."
+                .to_string(),
+        );
+    }
+    reveal(&license)
+}
+
+/// Open a URL with the same platform mechanism `reveal` uses, so no additional
+/// plugin, permission or content-security exception is needed to leave the app.
+fn open_external(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("/usr/bin/open");
+        command.arg(url);
+        command
+    };
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("explorer.exe");
+        command.arg(url);
+        command
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(url);
+        command
+    };
+    command
+        .spawn()
+        .map_err(|error| format!("Browser non disponibile: {error}"))?;
+    Ok(())
+}
+
+/// Open the source of exactly this build, at its own tag. Required by the AGPL
+/// and useful on its own: the claim "everything happens on your device" is only
+/// checkable against the code that is running.
+#[tauri::command]
+pub async fn open_source_repository() -> Result<(), String> {
+    open_external(&format!(
+        "{SOURCE_REPOSITORY}/tree/v{}",
+        env!("CARGO_PKG_VERSION")
+    ))
+}
+
 /// Show a diagnostics file in the system file manager. Confined to the app data
 /// directory so the UI can never turn this into a general "open anything" call.
 #[tauri::command]
@@ -1665,6 +1925,78 @@ mod tests {
         // neither may be blocked before the job starts.
         assert!(engine_not_ready(&bridge("missing"), "extract").is_none());
         assert!(engine_not_ready(&bridge("missing"), "privacy").is_none());
+    }
+
+    #[test]
+    fn the_install_phase_comes_from_the_current_run_and_not_the_previous_one() {
+        let log = "\
+[1/6] Ambiente Python locale
+[2/6] Conversione, OCR e trascrizione
+Risolvo 157 pacchetti...
+[3/6] Traduzione PDF con layout
+";
+        assert_eq!(
+            parse_install_step(log),
+            Some((3, 6, "Traduzione PDF con layout".to_string())),
+            "the last marker is the current phase",
+        );
+
+        // The log is appended across installs: without the run marker the `[6/6]`
+        // of the previous attempt would be shown as the state of this one.
+        let across_runs = format!(
+            "[5/6] Ollama e modelli di traduzione/OCR\n[6/6] Modelli documentali e audio\n\
+             {INSTALL_RUN_MARKER} 2026-08-09T10:00:00\n[1/6] Ambiente Python locale\n"
+        );
+        assert_eq!(
+            parse_install_step(&across_runs),
+            Some((1, 6, "Ambiente Python locale".to_string())),
+        );
+
+        // Lines that only look like a marker must not be mistaken for one.
+        assert_eq!(parse_install_step(""), None);
+        assert_eq!(parse_install_step("Risolvo i pacchetti [ok]"), None);
+        assert_eq!(parse_install_step("[2/6]"), None);
+        assert_eq!(parse_install_step("[due/sei] Ambiente"), None);
+    }
+
+    #[test]
+    fn free_space_is_reported_in_the_unit_the_user_reads_on_their_disk() {
+        assert_eq!(format_gigabytes(REQUIRED_INSTALL_BYTES), "35 GB");
+        assert_eq!(format_gigabytes(0), "0 GB");
+        // A near miss must read as a near miss, not as "35 GB" twice over.
+        assert_eq!(
+            format_gigabytes(34 * 1024 * 1024 * 1024 + 700_000_000),
+            "34,7 GB"
+        );
+        assert_eq!(format_gigabytes(512 * 1024 * 1024 * 1024), "512 GB");
+    }
+
+    #[test]
+    fn the_volume_holding_the_data_directory_reports_its_free_space() {
+        // The real machine, because the point of the number is that it is real.
+        // Zero would mean "unknown" and would disable the pre-install check.
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let free = free_bytes_for(temporary.path()).expect("a mounted volume");
+        assert!(free > 0, "a writable temporary directory has room");
+    }
+
+    #[test]
+    fn cancelling_an_install_clears_its_downloads_but_not_the_work_in_flight() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let work = temporary.path().join("work");
+        fs::create_dir_all(work.join("jobs/lavoro-in-corso")).expect("jobs directory");
+        fs::write(work.join("jobs/lavoro-in-corso/upload.bin"), b"in corso").expect("upload");
+        fs::write(work.join("Ollama-darwin.zip"), "scaricato a metà").expect("archive");
+        fs::create_dir_all(work.join("privacy-filter")).expect("unpacked archive");
+
+        clear_install_scratch(temporary.path());
+
+        assert!(
+            work.join("jobs/lavoro-in-corso/upload.bin").is_file(),
+            "a job being processed has nothing to do with the install",
+        );
+        assert!(!work.join("Ollama-darwin.zip").exists());
+        assert!(!work.join("privacy-filter").exists());
     }
 
     #[test]

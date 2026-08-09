@@ -1,3 +1,4 @@
+mod app_log;
 mod commands;
 mod database;
 mod engine_bridge;
@@ -121,6 +122,9 @@ pub fn run() {
                 .app_data_dir()
                 .map_err(|error| format!("Impossibile trovare la cartella dati: {error}"))?;
             fs::create_dir_all(&data_dir)?;
+            // Before anything else that can fail, so a panic in the rest of the
+            // setup leaves a trace instead of a window that never appears.
+            app_log::initialize(&data_dir);
             let results_dir = data_dir.join("results");
             fs::create_dir_all(&results_dir)?;
             let downloads_dir = app
@@ -130,8 +134,9 @@ pub fn run() {
             fs::create_dir_all(&downloads_dir)?;
 
             let database_path = data_dir.join("local-ai-desk.sqlite3");
-            database::initialize(&database_path)
-                .map_err(|error| format!("Impossibile inizializzare il database: {error}"))?;
+            // The message already tells the user what to do — including when the
+            // archive comes from a newer build — so it is passed through as is.
+            database::initialize(&database_path)?;
             sweep_partial_results(&results_dir);
 
             let engine_data_dir = data_dir.join("engine");
@@ -175,9 +180,11 @@ pub fn run() {
             commands::get_bridge_status,
             commands::get_runtime_status,
             commands::install_engine_runtime,
+            commands::cancel_engine_install,
             commands::start_engine_runtime,
             commands::stop_engine_runtime,
             commands::list_jobs,
+            commands::list_job_events,
             commands::start_jobs,
             commands::retry_job,
             commands::cancel_job,
@@ -185,6 +192,8 @@ pub fn run() {
             commands::export_results,
             commands::reveal_job_result,
             commands::reveal_path,
+            commands::reveal_license,
+            commands::open_source_repository,
             commands::download_engine_model,
         ])
         .build(tauri::generate_context!())
@@ -196,6 +205,10 @@ pub fn run() {
             // is what stops the engine runtime from leaving translation workers
             // and model servers running after the window closes.
             commands::stop_engine_processes(&app_handle.state::<AppState>());
+            // Last line of the run. A session whose log has no such line ended in
+            // a crash, which is the only way to know how often that happens
+            // without sending anything anywhere.
+            app_log::record_clean_exit();
         }
     });
 }
