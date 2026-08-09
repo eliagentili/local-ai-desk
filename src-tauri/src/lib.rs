@@ -45,9 +45,30 @@ fn migrate_legacy_model_store(legacy: &Path, shared: &Path) {
     if let Some(parent) = shared.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    // A rename across the same volume is instant; a failure just means the next
-    // install re-pulls, which is wasteful but never wrong.
-    let _ = fs::rename(legacy, shared);
+    // A rename is instant, but only within one volume. On Windows the app data
+    // folder and the user profile can sit on different drives, and there a
+    // failed rename would silently cost the user a 9.6 GB re-download.
+    if fs::rename(legacy, shared).is_ok() {
+        return;
+    }
+    if copy_tree(legacy, shared).is_ok() {
+        let _ = fs::remove_dir_all(legacy);
+    }
+}
+
+/// Recursive copy, for the cross-volume case `fs::rename` cannot handle.
+fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else {
+            fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
 }
 
 /// A `.partial` file is a result that was being streamed when the app stopped.
@@ -200,6 +221,26 @@ mod tests {
             ollama_models_dir(home, Some("   ".to_string())),
             Path::new("/Users/prova/.ollama/models"),
             "an empty override is not a choice",
+        );
+    }
+
+    #[test]
+    fn a_store_on_another_volume_is_copied_rather_than_abandoned() {
+        // `fs::rename` cannot cross volumes; without the fallback the user
+        // would silently re-download the models on the next install.
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let from = temporary.path().join("origine/blobs");
+        let to = temporary.path().join("destinazione/blobs");
+        fs::create_dir_all(from.join("annidata")).expect("source tree");
+        fs::write(from.join("sha256-a"), b"pesi").expect("blob");
+        fs::write(from.join("annidata/sha256-b"), b"altri pesi").expect("nested blob");
+
+        copy_tree(&from, &to).expect("copy");
+
+        assert_eq!(fs::read(to.join("sha256-a")).expect("blob"), b"pesi");
+        assert_eq!(
+            fs::read(to.join("annidata/sha256-b")).expect("nested blob"),
+            b"altri pesi",
         );
     }
 
