@@ -32,6 +32,30 @@ os.environ.setdefault("DOCLING_ARTIFACTS_PATH", str(MODELS_DIR / "docling"))
 # multi-gigabyte media never needs to be held in memory. A custom safety cap can
 # still be configured through LOCAL_AI_MAX_FILE_BYTES.
 MAX_FILE_BYTES = int(os.getenv("LOCAL_AI_MAX_FILE_BYTES", "0"))
+
+# A job with no ceiling cannot be told apart from a wedged engine: the desktop
+# watchdog only checks that this server still answers, so a stuck engine would
+# keep a job pending forever. The limit is deliberately generous — transcribing
+# a multi-gigabyte video legitimately takes hours — and zero disables it.
+JOB_TIMEOUT_SECONDS = float(os.getenv("LOCAL_AI_JOB_TIMEOUT_SECONDS", str(12 * 3600)))
+# How long the expired job is given to stop cooperatively before the answer is
+# sent anyway. Without this bound a truly wedged engine would hang the request
+# again, right after the ceiling that exists to prevent it.
+JOB_TIMEOUT_GRACE_SECONDS = float(
+    os.getenv("LOCAL_AI_JOB_TIMEOUT_GRACE_SECONDS", "30")
+)
+
+# Archives are expanded by the conversion engine, so their cost is decided by
+# what the headers declare and not by the size of the file the user picked. These
+# ceilings are what stops a 40 KB archive from filling the disk.
+MAX_ARCHIVE_ENTRIES = int(os.getenv("LOCAL_AI_MAX_ARCHIVE_ENTRIES", "2000"))
+MAX_ARCHIVE_BYTES = int(
+    os.getenv("LOCAL_AI_MAX_ARCHIVE_BYTES", str(4 * 1024 * 1024 * 1024))
+)
+MAX_ARCHIVE_RATIO = float(os.getenv("LOCAL_AI_MAX_ARCHIVE_RATIO", "200"))
+# Below this size a high ratio is normal (a few kilobytes of text compress very
+# well), so the ratio only decides for archives that are already large.
+ARCHIVE_RATIO_FLOOR_BYTES = 64 * 1024 * 1024
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
 WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cpu")
 WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
@@ -61,6 +85,14 @@ PDF_TRANSLATION_WORKER = Path(
     os.getenv(
         "PDF_TRANSLATION_WORKER",
         str(SOURCE_ROOT / "scripts" / "pdf_translation_worker.py"),
+    )
+)
+# Engines whose work is a single blocking call run here instead of inside the
+# server, so that cancelling a job actually stops the work.
+ENGINE_WORKER = Path(
+    os.getenv(
+        "LOCAL_AI_ENGINE_WORKER",
+        str(SOURCE_ROOT / "scripts" / "engine_worker.py"),
     )
 )
 OPF_CHECKPOINT = os.getenv(

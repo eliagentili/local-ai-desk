@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import logging
 import os
 import re
 import shutil
@@ -13,31 +14,58 @@ import time
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import FileResponse, JSONResponse
 from starlette.requests import ClientDisconnect
 
-from .config import JOBS_DIR, MAX_FILE_BYTES, WORK_DIR
+from .config import (
+    JOB_TIMEOUT_GRACE_SECONDS,
+    JOB_TIMEOUT_SECONDS,
+    JOBS_DIR,
+    MAX_FILE_BYTES,
+    WORK_DIR,
+)
 from .engines import (
     EngineResult,
     ProcessingCancelled,
-    cancel_all_translation_processes,
     engine_status,
     model_download_state,
     process_file,
     process_pdf_translation,
     process_text,
     start_model_download,
+    stop_all_child_processes,
 )
 
 
+# The interactive schema pages need no token to be useful to a stranger: they
+# enumerate every route and parameter of a server that processes the user's
+# documents. Nothing in the desktop app reads them.
 app = FastAPI(
     title="Local AI Desk",
     version="1.2.0",
     description="Backend locale per sei motori AI.",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
+
+# The access log writes one line per request, query string included, into a file
+# that stays on disk: with it the names of the user's documents end up in a log
+# they never asked for. Names now travel in a header, and the log is off anyway.
+logging.getLogger("uvicorn.access").disabled = True
 
 # The engine listens on the loopback interface, which every other program on the
 # machine can reach — including a web page the user happens to have open. Only
@@ -146,6 +174,8 @@ def health():
         "local_only": True,
         "streaming_uploads": True,
         "max_file_bytes": MAX_FILE_BYTES or None,
+        # Declared, so that a ceiling the user can hit is never a surprise.
+        "job_timeout_seconds": JOB_TIMEOUT_SECONDS or None,
     }
 
 
@@ -154,6 +184,7 @@ def status():
     payload = engine_status()
     payload["streaming_uploads"] = True
     payload["max_file_bytes"] = MAX_FILE_BYTES or None
+    payload["job_timeout_seconds"] = JOB_TIMEOUT_SECONDS or None
     return payload
 
 
@@ -307,9 +338,72 @@ def response_payload(
     }
 
 
+class JobDeadlineExceeded(RuntimeError):
+    """Raised when a job outlives the ceiling configured for a single job."""
+
+
+def deadline_message() -> str:
+    if JOB_TIMEOUT_SECONDS >= 2 * 3600:
+        # The ceiling is configurable, so the number is formatted rather than fixed.
+        limit = f"{JOB_TIMEOUT_SECONDS / 3600:g}".replace(".", ",") + " ore"
+    elif JOB_TIMEOUT_SECONDS == 3600:
+        limit = "un’ora"
+    else:
+        limit = f"{max(1, round(JOB_TIMEOUT_SECONDS / 60))} minuti"
+    return (
+        f"Il lavoro ha superato il tempo massimo di {limit} ed è stato interrotto. "
+        "Riprova con un file più piccolo, oppure suddividilo in parti e riavvia il lavoro."
+    )
+
+
+async def run_engine(job_id: str, cancel_event: threading.Event, function, *args):
+    """Run a blocking engine call with a ceiling on how long it may take.
+
+    The desktop watchdog only checks that this server still answers, so an engine
+    that is alive but wedged would leave the job pending for as long as the app
+    runs. When the ceiling is reached the job is asked to stop and the answer
+    says what to do; the grace period bounds the wait for an engine that cannot
+    be interrupted, so the request cannot hang again right here.
+    """
+    call = asyncio.ensure_future(run_in_threadpool(function, *args))
+    if JOB_TIMEOUT_SECONDS <= 0:
+        return await call
+    try:
+        return await asyncio.wait_for(asyncio.shield(call), JOB_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        cancel_event.set()
+        update_job_progress(
+            job_id,
+            state="error",
+            stage="Error",
+            stage_label="Tempo massimo superato",
+        )
+        done, _still_running = await asyncio.wait(
+            {call}, timeout=JOB_TIMEOUT_GRACE_SECONDS
+        )
+        for finished in done:
+            # Retrieved on purpose: the job already failed, and an unread
+            # exception would be reported again when the task is collected.
+            finished.exception()
+        raise JobDeadlineExceeded(deadline_message())
+
+
+def source_filename(header_value: str | None, query_value: str) -> str:
+    """The name of the file being processed, preferring the header.
+
+    It used to travel in the query string, where the access log recorded it. The
+    query parameter is still accepted so that a client which has not moved to the
+    header keeps working.
+    """
+    candidate = (header_value or "").strip() or query_value
+    return candidate or "input.bin"
+
+
 def local_error(exc: Exception) -> HTTPException:
     if isinstance(exc, ProcessingCancelled):
         return HTTPException(499, str(exc))
+    if isinstance(exc, JobDeadlineExceeded):
+        return HTTPException(504, str(exc))
     if isinstance(exc, RuntimeError):
         return HTTPException(503, str(exc))
     if isinstance(exc, OSError) and getattr(exc, "errno", None) == 28:
@@ -408,7 +502,7 @@ def shutdown_orphaned_engine() -> None:
         events = list(_JOB_EVENTS.values())
     for event in events:
         event.set()
-    cancel_all_translation_processes()
+    stop_all_child_processes()
     stop_owned_ollama()
     sweep_orphan_jobs()
     # Hard exit on purpose: a graceful uvicorn shutdown waits for in-flight
@@ -497,7 +591,7 @@ async def stop_child_processes() -> None:
         events = list(_JOB_EVENTS.values())
     for event in events:
         event.set()
-    cancel_all_translation_processes()
+    stop_all_child_processes()
 
 
 @app.post("/api/translate-pdf")
@@ -508,7 +602,9 @@ async def translate_streamed_pdf(
     mode: str = "translated",
     filename: str = "documento.pdf",
     job_id: str = "",
+    x_local_filename: str | None = Header(default=None),
 ):
+    filename = source_filename(x_local_filename, filename)
     if source_language not in TRANSLATION_LANGUAGES:
         raise HTTPException(400, "Lingua sorgente non supportata.")
     if target_language not in TRANSLATION_LANGUAGES:
@@ -598,7 +694,9 @@ async def translate_streamed_pdf(
             }
             update_job_progress(active_job_id, **safe_payload)
 
-        result = await run_in_threadpool(
+        result = await run_engine(
+            active_job_id,
+            cancel_event,
             process_pdf_translation,
             source,
             job_dir / "output",
@@ -679,8 +777,14 @@ async def process_streamed_file(
     language: str = "auto",
     filename: str = "input.bin",
     job_id: str = "",
+    x_local_filename: str | None = Header(default=None),
 ):
-    """Stream a file straight to disk before running the selected local engine."""
+    """Stream a file straight to disk before running the selected local engine.
+
+    The name of the file is read from `X-Local-Filename`, so that it stays out of
+    the request line; the `filename` query parameter is still honoured.
+    """
+    filename = source_filename(x_local_filename, filename)
     validate_options(tool, output_format)
     active_job_id, cancel_event = register_job(job_id)
     started = time.perf_counter()
@@ -714,7 +818,9 @@ async def process_streamed_file(
             # their own and can legitimately run for a long time.
             heartbeat = asyncio.create_task(_heartbeat(active_job_id))
             try:
-                result = await run_in_threadpool(
+                result = await run_engine(
+                    active_job_id,
+                    cancel_event,
                     process_file,
                     source,
                     tool,
@@ -758,7 +864,9 @@ async def process(
     started = time.perf_counter()
     try:
         if tool == "privacy" and text.strip() and not file:
-            result = await run_in_threadpool(
+            result = await run_engine(
+                active_job_id,
+                cancel_event,
                 process_text,
                 text,
                 output_format,
@@ -779,7 +887,9 @@ async def process(
                         size += len(chunk)
                         validate_size(size)
                         destination.write(chunk)
-                result = await run_in_threadpool(
+                result = await run_engine(
+                    active_job_id,
+                    cancel_event,
                     process_file,
                     source,
                     tool,
