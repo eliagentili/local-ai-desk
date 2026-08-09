@@ -21,24 +21,34 @@ use tokio_util::io::ReaderStream;
 use crate::{
     database::{self, AppState, CompletedJob, ProgressUpdate},
     models::JobSpec,
+    notify::{self, JobOutcome},
 };
 
 const LEGACY_BASE: &str = "http://127.0.0.1:8787";
 const TOKEN_HEADER: &str = "x-local-token";
 
-/// Shared secret handed to the engine runtime at spawn time. Without it the
-/// backend refuses every request, so a stray process squatting on port 8787 can
-/// neither receive the user's documents nor be mistaken for our own runtime.
+/// Shared secret handed to the engine runtime at spawn time.
+///
+/// It is generated per launch and never written to disk, so knowing it is proof
+/// of having been started by this process. That makes it two things at once: the
+/// credential the backend demands on every request, and the only identity check
+/// worth making before adopting a listener already sitting on the engine port —
+/// see [`listener_speaks_our_token`]. A stray program that squats on the port
+/// answers the connection but not the token, and is refused instead of adopted.
 static ENGINE_TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 pub(crate) fn engine_token() -> &'static str {
     ENGINE_TOKEN.get_or_init(|| {
         // An engine started outside the app — during development, or by an
-        // end-to-end test — already has a token. Adopting it keeps both sides
-        // speaking the same secret instead of guaranteeing a 401.
-        if let Ok(existing) = std::env::var("LOCAL_AI_ENGINE_TOKEN") {
-            if !existing.trim().is_empty() {
-                return existing;
+        // end-to-end test — already has a token, and adopting it keeps both
+        // sides speaking the same secret instead of guaranteeing a 401. In a
+        // release build the same convenience would let anything that can set an
+        // environment variable choose the secret, so it stops at debug builds.
+        if cfg!(debug_assertions) {
+            if let Ok(existing) = std::env::var("LOCAL_AI_ENGINE_TOKEN") {
+                if !existing.trim().is_empty() {
+                    return existing;
+                }
             }
         }
         let mut token = String::with_capacity(64);
@@ -47,6 +57,47 @@ pub(crate) fn engine_token() -> &'static str {
         }
         token
     })
+}
+
+/// Does whatever is listening on the engine port accept this launch's token?
+///
+/// Called from the synchronous startup path, before an async runtime is
+/// necessarily available, so the request is spelled out over a plain socket
+/// rather than through the HTTP client. Anything other than a `200` — a refusal,
+/// a program that speaks another protocol, a silent socket — means the listener
+/// is not ours and must not be handed the user's documents.
+pub(crate) fn listener_speaks_our_token(port: u16) -> bool {
+    use std::io::{Read, Write};
+
+    let address = match format!("127.0.0.1:{port}").parse() {
+        Ok(address) => address,
+        Err(_) => return false,
+    };
+    let Ok(mut stream) = std::net::TcpStream::connect_timeout(&address, Duration::from_millis(300))
+    else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(700)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(300)));
+    // No `Origin` header on purpose: the backend rejects any request carrying one.
+    let request = format!(
+        "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{TOKEN_HEADER}: {}\r\n\
+         Connection: close\r\n\r\n",
+        engine_token()
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut head = [0_u8; 15];
+    let mut filled = 0;
+    while filled < head.len() {
+        match stream.read(&mut head[filled..]) {
+            Ok(0) => break,
+            Ok(bytes) => filled += bytes,
+            Err(_) => return false,
+        }
+    }
+    String::from_utf8_lossy(&head[..filled]).starts_with("HTTP/1.1 200")
 }
 
 /// A client that always identifies itself to the local engine.
@@ -150,10 +201,60 @@ async fn persist_progress(
     .map_err(|error| RunError::Message(error.to_string()))
 }
 
+/// Write the last state of a job, retrying before giving up.
+///
+/// The final write is the only one that matters: every earlier tick can be lost
+/// without consequence, but a lost terminal state leaves a row that claims to be
+/// running with nothing behind it, and a cancel button that reports failure. The
+/// usual reason for the write to fail — a full disk — is also the reason it may
+/// succeed a moment later, so it is retried with widening pauses. If it still
+/// fails, the row is reconciled to `interrupted` on the next launch, which is why
+/// the job is released here rather than held open forever.
+async fn persist_terminal_state(state: &AppState, job_id: &str, update: OwnedProgress) {
+    let attempts = [
+        Duration::ZERO,
+        Duration::from_millis(250),
+        Duration::from_millis(1_000),
+        Duration::from_millis(3_000),
+    ];
+    let mut last_error = None;
+    for pause in attempts {
+        if !pause.is_zero() {
+            sleep(pause).await;
+        }
+        let attempt = persist_progress(
+            state.database_path.clone(),
+            job_id.to_string(),
+            OwnedProgress {
+                status: update.status.clone(),
+                progress: update.progress,
+                stage: update.stage.clone(),
+                stage_current: update.stage_current,
+                stage_total: update.stage_total,
+                part_index: update.part_index,
+                total_parts: update.total_parts,
+                message: update.message.clone(),
+            },
+        )
+        .await;
+        match attempt {
+            Ok(()) => return,
+            Err(RunError::Cancelled) => return,
+            Err(RunError::Message(message)) => last_error = Some(message),
+        }
+    }
+    if let Some(message) = last_error {
+        crate::app_log::record(&format!(
+            "stato finale «{}» non salvato dopo 4 tentativi: {message}",
+            update.status,
+        ));
+    }
+}
+
 async fn mark_cancelled(state: &AppState, job_id: &str) {
-    let _ = persist_progress(
-        state.database_path.clone(),
-        job_id.to_string(),
+    persist_terminal_state(
+        state,
+        job_id,
         OwnedProgress {
             message: Some("Lavoro annullato dall’utente.".to_string()),
             ..OwnedProgress::stage("cancelled", 0.0, "Annullato")
@@ -163,9 +264,9 @@ async fn mark_cancelled(state: &AppState, job_id: &str) {
 }
 
 async fn mark_failed(state: &AppState, job_id: &str, message: String) {
-    let _ = persist_progress(
-        state.database_path.clone(),
-        job_id.to_string(),
+    persist_terminal_state(
+        state,
+        job_id,
         OwnedProgress {
             message: Some(message),
             ..OwnedProgress::stage("failed", 0.0, "Elaborazione non riuscita")
@@ -381,6 +482,7 @@ async fn poll_translation_progress(
     ))
 }
 
+#[derive(Debug)]
 struct WrittenResult {
     path: PathBuf,
     name: String,
@@ -471,6 +573,20 @@ async fn write_text_result(
         .text()
         .await
         .map_err(|error| RunError::Message(error.to_string()))?;
+    write_text_payload(status, raw, state, spec, cancel).await
+}
+
+/// The engine answered: turn its payload into a result on disk, or into a reason.
+///
+/// Separated from the transport so the decisions below — above all the refusal of
+/// an empty output — can be exercised without a server.
+async fn write_text_payload(
+    status: reqwest::StatusCode,
+    raw: String,
+    state: &AppState,
+    spec: &JobSpec,
+    cancel: &AtomicBool,
+) -> Result<WrittenResult, RunError> {
     if !status.is_success() {
         let detail = serde_json::from_str::<Value>(&raw)
             .ok()
@@ -489,6 +605,19 @@ async fn write_text_result(
     }
     let payload: LegacyTextResult =
         serde_json::from_str(&raw).map_err(|error| RunError::Message(error.to_string()))?;
+    // A missing, empty or blank output is a failure, never a result. Refusing it
+    // here — before a file exists — is what keeps a future engine from handing
+    // the user a zero-byte file labelled "Risultato pronto", and keeps an empty
+    // file out of the batch export. Every engine that legitimately produces
+    // nothing already says why; this is the floor under all of them.
+    let output = payload.output.unwrap_or_default();
+    if output.trim().is_empty() {
+        return Err(RunError::Message(
+            "Il motore locale non ha estratto nessun contenuto da questo file. \
+             Se è una scansione prova con OCR, altrimenti controlla che il file non sia vuoto."
+                .to_string(),
+        ));
+    }
     let fallback = format!(
         "{}.{}",
         Path::new(&spec.item.name)
@@ -509,7 +638,7 @@ async fn write_text_result(
     // is what "risultato atomico" claims for every format, not only for PDF.
     let partial_path = job_dir.join(partial_name());
     let written = async {
-        fs::write(&partial_path, payload.output.unwrap_or_default()).await?;
+        fs::write(&partial_path, output).await?;
         fs::rename(&partial_path, &output_path).await
     }
     .await;
@@ -761,14 +890,23 @@ async fn execute_inner(
 pub fn spawn_job(state: AppState, spec: JobSpec, cancel: Arc<AtomicBool>) {
     tauri::async_runtime::spawn(async move {
         let result = execute_inner(&state, &spec, &cancel).await;
-        match result {
-            Ok(()) => {}
-            Err(RunError::Cancelled) => mark_cancelled(&state, &spec.id).await,
-            Err(RunError::Message(message)) => mark_failed(&state, &spec.id, message).await,
-        }
+        let outcome = match result {
+            Ok(()) => JobOutcome::Completed,
+            Err(RunError::Cancelled) => {
+                mark_cancelled(&state, &spec.id).await;
+                JobOutcome::Cancelled
+            }
+            Err(RunError::Message(message)) => {
+                mark_failed(&state, &spec.id, message).await;
+                JobOutcome::Failed
+            }
+        };
+        // Released only after the terminal state has been written, so a cancel
+        // arriving in between still finds the job and still answers truthfully.
         if let Ok(mut cancellations) = state.cancellations.lock() {
             cancellations.remove(&spec.id);
         }
+        notify::after_job(&state, &spec, outcome).await;
     });
 }
 
@@ -826,6 +964,7 @@ mod tests {
         };
         database::insert_jobs(&database_path, std::slice::from_ref(&spec)).expect("job");
         let state = AppState {
+            app: None,
             database_path: database_path.clone(),
             data_dir: temporary.path().to_path_buf(),
             results_dir,
@@ -862,6 +1001,153 @@ mod tests {
             }
         }
         assert_eq!(status, "cancelled");
+    }
+
+    /// A listener that answers once, echoing back whether it was given the
+    /// token. Stands in for the two things that can hold the engine port: our own
+    /// runtime, and somebody else's program.
+    fn one_shot_listener(accept_token: bool) -> u16 {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a free port");
+        let port = listener.local_addr().expect("address").port();
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut request = [0_u8; 1024];
+            let read = stream.read(&mut request).unwrap_or(0);
+            let request = String::from_utf8_lossy(&request[..read]);
+            let authenticated = request.contains(engine_token());
+            let status = if accept_token && authenticated {
+                "200 OK"
+            } else {
+                "401 Unauthorized"
+            };
+            let _ = stream.write_all(
+                format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .as_bytes(),
+            );
+        });
+        port
+    }
+
+    /// The port answering is not evidence of who is answering. Only the per-launch
+    /// token is, and without this check the app would hand the user's documents to
+    /// whatever happened to bind the port first.
+    #[test]
+    fn only_a_listener_that_accepts_our_token_can_be_adopted() {
+        assert!(listener_speaks_our_token(one_shot_listener(true)));
+        assert!(!listener_speaks_our_token(one_shot_listener(false)));
+
+        // Nothing listening at all: refused without waiting on a read.
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").expect("a free port");
+        let port = closed.local_addr().expect("address").port();
+        drop(closed);
+        assert!(!listener_speaks_our_token(port));
+    }
+
+    /// Assemble the state and the job a payload test needs, with the input file
+    /// on disk so the only variable is what the engine answered.
+    fn scenario(temporary: &tempfile::TempDir, job_id: &str) -> (AppState, JobSpec) {
+        let database_path = temporary.path().join("vuoto.sqlite3");
+        let results_dir = temporary.path().join("results");
+        std::fs::create_dir_all(&results_dir).expect("results directory");
+        database::initialize(&database_path).expect("schema");
+        let input_path = temporary.path().join("scansione bianca.pdf");
+        std::fs::write(&input_path, b"%PDF-1.7").expect("input");
+        let spec = JobSpec {
+            id: job_id.to_string(),
+            engine_job_id: job_id.to_string(),
+            batch_id: "batch-vuoto".to_string(),
+            library_item_id: None,
+            item: LibraryItem {
+                id: "source".to_string(),
+                name: "scansione bianca.pdf".to_string(),
+                path: input_path.to_string_lossy().into_owned(),
+                kind: "PDF".to_string(),
+                size_bytes: 8,
+                content_hash: String::new(),
+                status: "temporary".to_string(),
+                added_at: "2026-08-06T12:00:00Z".to_string(),
+                updated_at: "2026-08-06T12:00:00Z".to_string(),
+            },
+            options: WorkflowOptions::default(),
+            tool: "auto".to_string(),
+        };
+        database::insert_jobs(&database_path, std::slice::from_ref(&spec)).expect("job");
+        let state = AppState {
+            app: None,
+            database_path,
+            data_dir: temporary.path().to_path_buf(),
+            results_dir,
+            downloads_dir: temporary.path().join("downloads"),
+            engine_resource_dir: temporary.path().join("engine-resource"),
+            engine_data_dir: temporary.path().join("engine-data"),
+            ollama_models_dir: temporary.path().join("ollama-models"),
+            runtime_process: Arc::new(Mutex::new(None)),
+            ollama_process: Arc::new(Mutex::new(None)),
+            installer_process: Arc::new(Mutex::new(None)),
+            last_install_result: Arc::new(Mutex::new(None)),
+            scheduler: Arc::new(tokio::sync::Semaphore::new(3)),
+            cancellations: Arc::new(Mutex::new(HashMap::new())),
+        };
+        (state, spec)
+    }
+
+    /// An engine that returns nothing has failed, whatever it says about itself:
+    /// a zero-byte file presented as "Risultato pronto" is a silent loss, and the
+    /// batch export would carry it home as if it were good.
+    #[tokio::test]
+    async fn an_empty_output_never_becomes_a_completed_job() {
+        for (label, payload) in [
+            (
+                "output assente",
+                serde_json::json!({ "output": null, "format": "markdown", "filename": "scansione.md", "engine": "PaddleOCR", "elapsed_seconds": 3.0 }),
+            ),
+            (
+                "output vuoto",
+                serde_json::json!({ "output": "", "format": "markdown", "filename": "scansione.md", "engine": "PaddleOCR", "elapsed_seconds": 3.0 }),
+            ),
+            (
+                "solo spazi",
+                serde_json::json!({ "output": "  \n\t ", "format": "markdown", "filename": "scansione.md", "engine": "PaddleOCR", "elapsed_seconds": 3.0 }),
+            ),
+        ] {
+            let temporary = tempfile::tempdir().expect("temporary directory");
+            let (state, spec) = scenario(&temporary, "vuoto");
+            let cancel = AtomicBool::new(false);
+
+            let outcome = write_text_payload(
+                reqwest::StatusCode::OK,
+                payload.to_string(),
+                &state,
+                &spec,
+                &cancel,
+            )
+            .await;
+
+            let message = match outcome {
+                Err(RunError::Message(message)) => message,
+                other => panic!("{label}: atteso un errore, ricevuto {other:?}"),
+            };
+            assert!(
+                message.contains("nessun contenuto"),
+                "{label}: il messaggio dice cosa fare — {message}",
+            );
+            assert!(
+                !state.results_dir.join(&spec.id).exists(),
+                "{label}: nessun file viene scritto",
+            );
+
+            // The same path `spawn_job` takes on a failure: the job must land on
+            // `failed`, never on `completed`.
+            mark_failed(&state, &spec.id, message).await;
+            let job = database::list_jobs(&state.database_path, 200)
+                .expect("jobs")
+                .remove(0);
+            assert_eq!(job.status, "failed", "{label}");
+            assert_eq!(job.output_path, None, "{label}");
+        }
     }
 
     #[tokio::test]
@@ -917,6 +1203,7 @@ mod tests {
         };
         database::insert_jobs(&database_path, std::slice::from_ref(&spec)).expect("job");
         let state = AppState {
+            app: None,
             database_path: database_path.clone(),
             data_dir: temporary.path().to_path_buf(),
             results_dir,

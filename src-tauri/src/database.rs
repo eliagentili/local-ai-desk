@@ -9,10 +9,13 @@ use chrono::Utc;
 use rusqlite::{params, Connection};
 use tokio::sync::Semaphore;
 
-use crate::models::{Job, JobSpec, LibraryItem};
+use crate::models::{Job, JobEvent, JobSpec, LibraryItem};
 
 #[derive(Debug, Clone)]
 pub struct AppState {
+    /// Handle to the running application, when there is one. Absent in tests,
+    /// which exercise the job pipeline without a window to notify.
+    pub app: Option<tauri::AppHandle>,
     pub database_path: PathBuf,
     pub data_dir: PathBuf,
     pub results_dir: PathBuf,
@@ -61,8 +64,47 @@ fn ensure_column(
     Ok(())
 }
 
-pub fn initialize(path: &Path) -> rusqlite::Result<()> {
-    let connection = connect(path)?;
+/// Schema revision this build knows how to read.
+///
+/// Every migration is additive, so a build whose `SCHEMA_VERSION` is at least as
+/// high as the stored one can always open the file. The stamp exists for the
+/// opposite direction: after a rollback to an older app, or when a future build
+/// finally has to make a non-additive change, opening the archive blindly would
+/// silently drop columns the user's history depends on. Bump this only when a
+/// change would make the file unreadable to an earlier build.
+const SCHEMA_VERSION: i64 = 1;
+
+/// Prepare the archive for use, migrating it if it was written by an earlier
+/// build. Errors are already phrased for the user: the caller shows them as-is.
+pub fn initialize(path: &Path) -> Result<(), String> {
+    let unreadable = |error: rusqlite::Error| {
+        format!(
+            "La libreria di questo computer non si è aperta ({error}). Riavvia l'app; \
+             se il problema resta, chiudi gli altri programmi che potrebbero usare la \
+             cartella dati dell'app."
+        )
+    };
+    let connection = connect(path).map_err(unreadable)?;
+    let stored: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(unreadable)?;
+    if stored > SCHEMA_VERSION {
+        return Err(
+            "La libreria di questo computer è stata scritta da una versione più recente di \
+             Local AI Desk. Aggiorna l'app all'ultima versione per riaprirla: i tuoi dati \
+             restano dove sono."
+                .to_string(),
+        );
+    }
+    migrate(&connection).map_err(unreadable)?;
+    connection
+        .pragma_update(None, "user_version", SCHEMA_VERSION)
+        .map_err(unreadable)?;
+    prune_job_events(path, 200).map_err(unreadable)?;
+    Ok(())
+}
+
+fn migrate(connection: &Connection) -> rusqlite::Result<()> {
     connection.pragma_update(None, "journal_mode", "WAL")?;
     connection.pragma_update(None, "journal_size_limit", 8 * 1024 * 1024)?;
     connection.execute_batch(
@@ -135,6 +177,7 @@ pub fn initialize(path: &Path) -> rusqlite::Result<()> {
     )?;
 
     for (column, declaration) in [
+        // Additive only, never renamed: users upgrade from earlier builds.
         ("batch_id", "TEXT"),
         ("tool", "TEXT NOT NULL DEFAULT 'auto'"),
         ("output_format", "TEXT NOT NULL DEFAULT 'markdown'"),
@@ -152,7 +195,7 @@ pub fn initialize(path: &Path) -> rusqlite::Result<()> {
         ("elapsed_seconds", "REAL"),
         ("warnings", "TEXT"),
     ] {
-        ensure_column(&connection, "jobs", column, declaration)?;
+        ensure_column(connection, "jobs", column, declaration)?;
     }
 
     // Foundation databases do not have batch_id until the migration above.
@@ -162,6 +205,9 @@ pub fn initialize(path: &Path) -> rusqlite::Result<()> {
         [],
     )?;
 
+    // Reconciliation of every job left mid-flight. It covers both a crash and
+    // the case where writing a final state failed on the previous run: a job can
+    // stay non-terminal until the next launch, never forever.
     let now = Utc::now().to_rfc3339();
     connection.execute(
         "UPDATE jobs
@@ -171,7 +217,6 @@ pub fn initialize(path: &Path) -> rusqlite::Result<()> {
          WHERE status IN ('queued', 'preparing', 'uploading', 'running', 'finalizing', 'cancelling')",
         params![now],
     )?;
-    prune_job_events(path, 200)?;
     Ok(())
 }
 
@@ -452,6 +497,62 @@ pub fn requeue_job(database_path: &Path, job_id: &str) -> rusqlite::Result<bool>
     }
     transaction.commit()?;
     Ok(changed > 0)
+}
+
+/// Transitions of one job, oldest first: read in the order they happened, the
+/// rows explain what the engine did, which is otherwise written and never shown.
+pub fn list_job_events(database_path: &Path, job_id: &str) -> rusqlite::Result<Vec<JobEvent>> {
+    let connection = connect(database_path)?;
+    let mut statement = connection.prepare(
+        "SELECT id, status, progress, stage, message, created_at
+         FROM job_events WHERE job_id = ?1 ORDER BY id ASC",
+    )?;
+    let rows = statement.query_map(params![job_id], |row| {
+        Ok(JobEvent {
+            id: row.get(0)?,
+            status: row.get(1)?,
+            progress: row.get(2)?,
+            stage: row.get(3)?,
+            message: row.get(4)?,
+            created_at: row.get(5)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// How a batch stands right now: still running, finished well, or not.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BatchOutcome {
+    pub pending: usize,
+    pub completed: usize,
+    pub failed: usize,
+    pub cancelled: usize,
+}
+
+/// Count a batch by outcome, so the last job to finish can tell whether it was
+/// the last one and what to say about the batch as a whole.
+pub fn batch_outcome(database_path: &Path, batch_id: &str) -> rusqlite::Result<BatchOutcome> {
+    let connection = connect(database_path)?;
+    let mut statement = connection
+        .prepare("SELECT status, COUNT(*) FROM jobs WHERE batch_id = ?1 GROUP BY status")?;
+    let rows = statement.query_map(params![batch_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?.max(0) as usize,
+        ))
+    })?;
+    let mut outcome = BatchOutcome::default();
+    for row in rows {
+        let (status, count) = row?;
+        match status.as_str() {
+            "completed" => outcome.completed += count,
+            "failed" => outcome.failed += count,
+            "cancelled" | "interrupted" => outcome.cancelled += count,
+            // Anything else is still on its way to a terminal state.
+            _ => outcome.pending += count,
+        }
+    }
+    Ok(outcome)
 }
 
 /// The event log is an append-only audit trail of a job's transitions. Capping
@@ -862,6 +963,234 @@ mod tests {
         let job = list_jobs(&path, 200).expect("jobs").remove(0);
         assert_eq!(job.library_item_id, None);
         assert_eq!(job.input_name, "grande.mp4");
+    }
+
+    /// A job that was mid-flight when the app stopped must come back as
+    /// `interrupted`, so the user can retry it instead of finding a row that
+    /// claims to be running with nothing behind it.
+    #[test]
+    fn a_job_left_running_is_reconciled_to_interrupted_on_the_next_launch() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let path = temporary.path().join("recovery.sqlite3");
+        initialize(&path).expect("schema");
+        let now = "2026-08-06T10:00:00Z".to_string();
+        let spec = JobSpec {
+            id: "in-volo".to_string(),
+            engine_job_id: "in-volo".to_string(),
+            batch_id: "batch".to_string(),
+            library_item_id: None,
+            item: LibraryItem {
+                id: "source".to_string(),
+                name: "lezione.mp4".to_string(),
+                path: "/tmp/lezione.mp4".to_string(),
+                kind: "Video".to_string(),
+                size_bytes: 4,
+                content_hash: String::new(),
+                status: "temporary".to_string(),
+                added_at: now.clone(),
+                updated_at: now,
+            },
+            options: WorkflowOptions::default(),
+            tool: "faster-whisper".to_string(),
+        };
+        insert_job(&path, &spec).expect("job");
+        update_job_progress(
+            &path,
+            "in-volo",
+            &ProgressUpdate {
+                status: "running",
+                progress: 42.0,
+                stage: "Elaborazione nel motore locale",
+                stage_current: 0,
+                stage_total: 0,
+                part_index: 1,
+                total_parts: 1,
+                message: None,
+            },
+        )
+        .expect("running");
+
+        initialize(&path).expect("second launch");
+
+        let job = list_jobs(&path, 200).expect("jobs").remove(0);
+        assert_eq!(job.status, "interrupted");
+        assert_eq!(job.progress, 0.0);
+        assert!(
+            job.error
+                .is_some_and(|error| error.contains("avviarlo di nuovo")),
+            "the row says what the user can do about it",
+        );
+    }
+
+    #[test]
+    fn an_archive_from_a_newer_build_is_refused_instead_of_opened() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let path = temporary.path().join("dal-futuro.sqlite3");
+        initialize(&path).expect("schema");
+        let connection = Connection::open(&path).expect("connection");
+        connection
+            .pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+            .expect("stamp a future revision");
+        drop(connection);
+
+        // Opening it anyway is how a rollback loses a user's library: an older
+        // build would read the columns it knows and write over the rest.
+        let error = initialize(&path).expect_err("a newer archive is refused");
+        assert!(error.contains("versione più recente"), "{error}");
+
+        // The stamp survives the refusal, so the newer build still opens it.
+        let connection = Connection::open(&path).expect("connection");
+        let stored: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("stored revision");
+        assert_eq!(stored, SCHEMA_VERSION + 1);
+    }
+
+    #[test]
+    fn the_event_trail_of_a_job_is_readable_in_the_order_it_happened() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let path = temporary.path().join("eventi.sqlite3");
+        initialize(&path).expect("schema");
+        let now = "2026-08-06T10:00:00Z".to_string();
+        let spec = JobSpec {
+            id: "tracciato".to_string(),
+            engine_job_id: "tracciato".to_string(),
+            batch_id: "batch-eventi".to_string(),
+            library_item_id: None,
+            item: LibraryItem {
+                id: "source".to_string(),
+                name: "relazione.pdf".to_string(),
+                path: "/tmp/relazione.pdf".to_string(),
+                kind: "PDF".to_string(),
+                size_bytes: 4,
+                content_hash: String::new(),
+                status: "temporary".to_string(),
+                added_at: now.clone(),
+                updated_at: now,
+            },
+            options: WorkflowOptions::default(),
+            tool: "auto".to_string(),
+        };
+        insert_job(&path, &spec).expect("job");
+        update_job_progress(
+            &path,
+            "tracciato",
+            &ProgressUpdate {
+                status: "running",
+                progress: 10.0,
+                stage: "Elaborazione nel motore locale",
+                stage_current: 0,
+                stage_total: 0,
+                part_index: 1,
+                total_parts: 1,
+                message: None,
+            },
+        )
+        .expect("progress");
+        let output = temporary.path().join("relazione.md");
+        complete_job(
+            &path,
+            "tracciato",
+            &CompletedJob {
+                output_path: &output.to_string_lossy(),
+                output_name: "relazione.md",
+                output_mime: "text/markdown",
+                engine: "test",
+                elapsed_seconds: 0.4,
+                warnings: &[],
+            },
+        )
+        .expect("complete");
+
+        let events = list_job_events(&path, "tracciato").expect("events");
+        let statuses: Vec<&str> = events.iter().map(|event| event.status.as_str()).collect();
+        assert_eq!(statuses, ["queued", "running", "completed"]);
+        assert!(
+            events.windows(2).all(|pair| pair[0].id < pair[1].id),
+            "ids grow with time, so the order is the history",
+        );
+        assert!(list_job_events(&path, "mai-esistito")
+            .expect("no events")
+            .is_empty());
+    }
+
+    #[test]
+    fn a_batch_is_only_finished_when_no_job_is_still_on_its_way() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let path = temporary.path().join("batch.sqlite3");
+        initialize(&path).expect("schema");
+        let now = "2026-08-06T10:00:00Z".to_string();
+        let specs: Vec<JobSpec> = ["uno", "due"]
+            .into_iter()
+            .map(|id| JobSpec {
+                id: id.to_string(),
+                engine_job_id: id.to_string(),
+                batch_id: "insieme".to_string(),
+                library_item_id: None,
+                item: LibraryItem {
+                    id: format!("source-{id}"),
+                    name: format!("{id}.md"),
+                    path: format!("/tmp/{id}.md"),
+                    kind: "Testo".to_string(),
+                    size_bytes: 4,
+                    content_hash: String::new(),
+                    status: "temporary".to_string(),
+                    added_at: now.clone(),
+                    updated_at: now.clone(),
+                },
+                options: WorkflowOptions::default(),
+                tool: "auto".to_string(),
+            })
+            .collect();
+        insert_jobs(&path, &specs).expect("jobs");
+
+        assert_eq!(
+            batch_outcome(&path, "insieme").expect("outcome"),
+            BatchOutcome {
+                pending: 2,
+                ..BatchOutcome::default()
+            },
+        );
+
+        let output = temporary.path().join("uno.md");
+        complete_job(
+            &path,
+            "uno",
+            &CompletedJob {
+                output_path: &output.to_string_lossy(),
+                output_name: "uno.md",
+                output_mime: "text/markdown",
+                engine: "test",
+                elapsed_seconds: 0.1,
+                warnings: &[],
+            },
+        )
+        .expect("complete");
+        update_job_progress(
+            &path,
+            "due",
+            &ProgressUpdate {
+                status: "failed",
+                progress: 0.0,
+                stage: "Elaborazione non riuscita",
+                stage_current: 0,
+                stage_total: 0,
+                part_index: 1,
+                total_parts: 1,
+                message: Some("Il motore non ha prodotto testo"),
+            },
+        )
+        .expect("fail");
+
+        assert_eq!(
+            batch_outcome(&path, "insieme").expect("outcome"),
+            BatchOutcome {
+                pending: 0,
+                completed: 1,
+                failed: 1,
+                cancelled: 0,
+            },
+        );
     }
 
     #[test]
