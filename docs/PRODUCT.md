@@ -48,7 +48,7 @@ qualcosa che non esiste.
 | **Studio** | lavoro guidato su un elemento, con input, anteprima e output | presente senza anteprima: input, obiettivo, formato e opzioni. L'anteprima e il confronto prima/dopo sono in F2 |
 | **Attività** | coda globale, progresso, annullamento, retry e log leggibili | presente e completa: dalla 1.0 ogni lavoro espone anche la cronologia dei suoi eventi, con fase, stato, messaggio e copia negli appunti |
 | **Modelli** | pack installabili, dimensioni, compatibilità e aggiornamenti | presente: installazione dei motori con fase e annullamento, spazio richiesto e libero, download su richiesta del pack Privacy Filter. Rimozione, riparazione e aggiornamento di un singolo pack mancano |
-| **Impostazioni** | privacy, rete, storage, risorse, diagnostica e aggiornamenti | presente come diagnostica, aggiornamenti, log, licenza e sorgente. L'unica preferenza è il controllo automatico degli aggiornamenti: concorrenza, retention, notifiche e tema non hanno un interruttore (F5) |
+| **Impostazioni** | privacy, rete, storage, risorse, diagnostica e aggiornamenti | presente come diagnostica, aggiornamenti, log, licenza e sorgente. L'unica preferenza è il controllo automatico degli aggiornamenti: concorrenza, retention e tema non hanno un interruttore (F5). Non ci sono notifiche di sistema: a batch concluso l'esito si legge in Attività |
 | **Workflow** | pipeline salvabili, cartelle sorvegliate e automazioni locali | **assente**. La voce è stata rimossa dalla barra laterale nella 1.0: era una pagina segnaposto. La promessa vive in F4 |
 
 Home e Studio espongono inoltre una corsia **Drop rapido**, distinta dalla

@@ -33,7 +33,7 @@ generato a ogni avvio. Dettagli in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 | Percorso | Ruolo |
 | --- | --- |
-| [src/App.tsx](src/App.tsx) | Orchestratore UI: stato globale, polling, notifiche, scorciatoie |
+| [src/App.tsx](src/App.tsx) | Orchestratore UI: stato globale, polling, avvisi, scorciatoie |
 | [src/components/](src/components/) | Una vista per sezione + `ErrorBoundary` |
 | [src/App.css](src/App.css) | Design system a token; il tema scuro rimappa **solo** i token |
 | [src/lib/errors.ts](src/lib/errors.ts) | Traduce gli errori grezzi di OS/Rust in messaggi azionabili |
@@ -151,9 +151,6 @@ PYTHONPATH=engine python -m unittest discover -s engine/tests -v
   `PRAGMA user_version` è confrontato con `SCHEMA_VERSION` in `initialize` e un
   archivio più recente viene rifiutato con un messaggio azionabile: aprirlo
   significherebbe leggere a metà i dati di un utente che ha fatto un downgrade.
-- **Non notificare a ogni file di un batch.** Le notifiche di sistema escono solo
-  con la finestra non a fuoco, una alla prima fallita e una a batch concluso:
-  altrimenti un batch da 500 file produce 500 banner.
 - **Non aggiungere step di firma del codice ai workflow.** L'assenza di firma
   Apple e Authenticode è una decisione di prodotto (progetto gratuito, nessuna
   entrata): va documentata e resa facile, non aggirata. Per lo stesso motivo lo
@@ -178,10 +175,10 @@ dell'installazione.
 Chiuso nella 1.0: annullamento realmente interrompente su tutti e sei i motori,
 nessun output vuoto dichiarato completato, benvenuto al primo avvio con spazio
 richiesto e libero, fase e annullamento dell'installazione, cronologia degli
-eventi per lavoro, notifiche di sistema, tetto di durata per lavoro, log
-applicativo con panic hook, licenza e attribuzioni dentro il bundle, inventario
-licenze generato dai lock, threat model e audit privacy pubblicati, contrasto
-misurato da un cancello in CI.
+eventi per lavoro, tetto di durata per lavoro, log applicativo con panic hook,
+licenza e attribuzioni dentro il bundle, inventario licenze generato dai lock,
+threat model e audit privacy pubblicati, contrasto misurato da un cancello in
+CI.
 
 **Non firmata, in modo permanente**: nessun certificato Apple né Authenticode,
 perché il progetto è gratuito e non ha entrate con cui pagarli. L'attrito di
@@ -191,7 +188,8 @@ Fuori dalla 1.0 e dichiarato tale in README, roadmap e note di rilascio:
 pausa/ripresa, interfaccia in lingue diverse dall'italiano, anteprima/editor,
 workflow visuali, tag e collezioni in Libreria, export DOCX/HTML/VTT, scheduler
 adattivo (concorrenza fissa a tre), eliminazione dei risultati dall'app,
-interruttore delle notifiche e altre preferenze in Impostazioni (la tabella
-`settings` resta creata e non usata). Non verificato: sessioni con screen reader
-reali, rollback dell'aggiornamento su macchine pulite, collaudo su disco pieno e
-batch multi-GB su hardware.
+notifiche di sistema (rimosse: il plugin non faceva più partire il binario di
+test su Windows, non verificabile senza una macchina Windows) e altre
+preferenze in Impostazioni (la tabella `settings` resta creata e non usata).
+Non verificato: sessioni con screen reader reali, rollback dell'aggiornamento
+su macchine pulite, collaudo su disco pieno e batch multi-GB su hardware.

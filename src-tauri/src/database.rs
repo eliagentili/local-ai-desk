@@ -13,9 +13,6 @@ use crate::models::{Job, JobEvent, JobSpec, LibraryItem};
 
 #[derive(Debug, Clone)]
 pub struct AppState {
-    /// Handle to the running application, when there is one. Absent in tests,
-    /// which exercise the job pipeline without a window to notify.
-    pub app: Option<tauri::AppHandle>,
     pub database_path: PathBuf,
     pub data_dir: PathBuf,
     pub results_dir: PathBuf,
@@ -518,41 +515,6 @@ pub fn list_job_events(database_path: &Path, job_id: &str) -> rusqlite::Result<V
         })
     })?;
     rows.collect()
-}
-
-/// How a batch stands right now: still running, finished well, or not.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct BatchOutcome {
-    pub pending: usize,
-    pub completed: usize,
-    pub failed: usize,
-    pub cancelled: usize,
-}
-
-/// Count a batch by outcome, so the last job to finish can tell whether it was
-/// the last one and what to say about the batch as a whole.
-pub fn batch_outcome(database_path: &Path, batch_id: &str) -> rusqlite::Result<BatchOutcome> {
-    let connection = connect(database_path)?;
-    let mut statement = connection
-        .prepare("SELECT status, COUNT(*) FROM jobs WHERE batch_id = ?1 GROUP BY status")?;
-    let rows = statement.query_map(params![batch_id], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, i64>(1)?.max(0) as usize,
-        ))
-    })?;
-    let mut outcome = BatchOutcome::default();
-    for row in rows {
-        let (status, count) = row?;
-        match status.as_str() {
-            "completed" => outcome.completed += count,
-            "failed" => outcome.failed += count,
-            "cancelled" | "interrupted" => outcome.cancelled += count,
-            // Anything else is still on its way to a terminal state.
-            _ => outcome.pending += count,
-        }
-    }
-    Ok(outcome)
 }
 
 /// The event log is an append-only audit trail of a job's transitions. Capping
@@ -1144,13 +1106,15 @@ mod tests {
             .collect();
         insert_jobs(&path, &specs).expect("jobs");
 
-        assert_eq!(
-            batch_outcome(&path, "insieme").expect("outcome"),
-            BatchOutcome {
-                pending: 2,
-                ..BatchOutcome::default()
-            },
-        );
+        let statuses = |ids: &[&str]| -> Vec<String> {
+            let ids: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
+            jobs_by_ids(&path, &ids)
+                .expect("jobs")
+                .into_iter()
+                .map(|job| job.status)
+                .collect()
+        };
+        assert_eq!(statuses(&["uno", "due"]), ["queued", "queued"]);
 
         let output = temporary.path().join("uno.md");
         complete_job(
@@ -1182,15 +1146,9 @@ mod tests {
         )
         .expect("fail");
 
-        assert_eq!(
-            batch_outcome(&path, "insieme").expect("outcome"),
-            BatchOutcome {
-                pending: 0,
-                completed: 1,
-                failed: 1,
-                cancelled: 0,
-            },
-        );
+        // Both jobs of the batch are now terminal, and each carries the outcome
+        // it actually reached: nothing in the batch is still on its way.
+        assert_eq!(statuses(&["uno", "due"]), ["completed", "failed"]);
     }
 
     #[test]

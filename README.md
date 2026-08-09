@@ -143,8 +143,6 @@ viene accettato soltanto se supera la verifica della firma Ed25519.
 - tetto di durata per lavoro, così un motore bloccato non resta appeso per sempre;
 - cronologia degli eventi di ogni lavoro, con fase, stato, messaggio e copia
   negli appunti;
-- notifiche di sistema a batch concluso e alla prima fallita, solo quando la
-  finestra non è a fuoco;
 - riavvio di un lavoro non riuscito con le stesse impostazioni, dalla Libreria;
 - risultati atomici in ogni formato e ZIP con manifest JSON;
 - runtime e motori in background, senza finestre Terminal o PowerShell;
@@ -209,8 +207,10 @@ finiscono.
 - **Anteprima, editor, confronto prima/dopo e workflow visuali non esistono.**
   Sono F2 e F4.
 - **Impostazioni configura solo il controllo automatico degli aggiornamenti.**
-  Concorrenza, retention, notifiche e tema non hanno un interruttore, e non si
-  può rimuovere o riparare il runtime dei motori dall'app.
+  Concorrenza, retention e tema non hanno un interruttore, e non si può
+  rimuovere o riparare il runtime dei motori dall'app.
+- **Non ci sono notifiche di sistema: a batch concluso l'esito si legge in
+  Attività.**
 - **Non si può scegliere fra PaddleOCR e GLM-OCR**: la scelta è del router.
 - **Il server dei modelli locale non richiede autenticazione** sulla sua porta:
   un altro programma sullo stesso computer può usarne le risorse. Nessun documento

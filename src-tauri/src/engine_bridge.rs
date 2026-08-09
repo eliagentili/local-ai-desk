@@ -21,7 +21,6 @@ use tokio_util::io::ReaderStream;
 use crate::{
     database::{self, AppState, CompletedJob, ProgressUpdate},
     models::JobSpec,
-    notify::{self, JobOutcome},
 };
 
 const LEGACY_BASE: &str = "http://127.0.0.1:8787";
@@ -889,24 +888,16 @@ async fn execute_inner(
 
 pub fn spawn_job(state: AppState, spec: JobSpec, cancel: Arc<AtomicBool>) {
     tauri::async_runtime::spawn(async move {
-        let result = execute_inner(&state, &spec, &cancel).await;
-        let outcome = match result {
-            Ok(()) => JobOutcome::Completed,
-            Err(RunError::Cancelled) => {
-                mark_cancelled(&state, &spec.id).await;
-                JobOutcome::Cancelled
-            }
-            Err(RunError::Message(message)) => {
-                mark_failed(&state, &spec.id, message).await;
-                JobOutcome::Failed
-            }
-        };
+        match execute_inner(&state, &spec, &cancel).await {
+            Ok(()) => {}
+            Err(RunError::Cancelled) => mark_cancelled(&state, &spec.id).await,
+            Err(RunError::Message(message)) => mark_failed(&state, &spec.id, message).await,
+        }
         // Released only after the terminal state has been written, so a cancel
         // arriving in between still finds the job and still answers truthfully.
         if let Ok(mut cancellations) = state.cancellations.lock() {
             cancellations.remove(&spec.id);
         }
-        notify::after_job(&state, &spec, outcome).await;
     });
 }
 
@@ -964,7 +955,6 @@ mod tests {
         };
         database::insert_jobs(&database_path, std::slice::from_ref(&spec)).expect("job");
         let state = AppState {
-            app: None,
             database_path: database_path.clone(),
             data_dir: temporary.path().to_path_buf(),
             results_dir,
@@ -1076,7 +1066,6 @@ mod tests {
         };
         database::insert_jobs(&database_path, std::slice::from_ref(&spec)).expect("job");
         let state = AppState {
-            app: None,
             database_path,
             data_dir: temporary.path().to_path_buf(),
             results_dir,
@@ -1203,7 +1192,6 @@ mod tests {
         };
         database::insert_jobs(&database_path, std::slice::from_ref(&spec)).expect("job");
         let state = AppState {
-            app: None,
             database_path: database_path.clone(),
             data_dir: temporary.path().to_path_buf(),
             results_dir,

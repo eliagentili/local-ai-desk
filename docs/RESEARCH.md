@@ -17,8 +17,8 @@ Per una app locale non serve il runtime server di un framework web full-stack.
 Vite produce asset statici, mentre Tauri espone solo comandi nativi espliciti. Il
 sistema di [capabilities di Tauri](https://v2.tauri.app/security/capabilities/)
 permette di limitare ciò che ogni WebView può invocare. La 1.0 concede una sola
-capability: selettore file, updater, riavvio e notifiche di sistema. Rete, shell e
-filesystem generico non sono esposti alla UI.
+capability: selettore file, updater e riavvio. Rete, shell e filesystem generico
+non sono esposti alla UI.
 
 ## Documenti
 

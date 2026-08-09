@@ -268,7 +268,7 @@ lock il pacchetto compare.
 | xsdata | 26.2 | MIT | Traduzione PDF (macOS), Traduzione PDF (Windows) |
 | yarl | 1.24.5 | Apache-2.0 | Motori (macOS), Motori (Windows), Traduzione PDF (macOS), Traduzione PDF (Windows) |
 
-## Core nativo Rust (553 crate)
+## Core nativo Rust (543 crate)
 
 Compilate dentro l'eseguibile dell'applicazione.
 
@@ -486,7 +486,6 @@ Compilate dentro l'eseguibile dell'applicazione.
 | lock_api | 0.4.14 | MIT OR Apache-2.0 |
 | log | 0.4.33 | MIT OR Apache-2.0 |
 | lru-slab | 0.1.2 | MIT OR Apache-2.0 OR Zlib |
-| mac-notification-sys | 0.6.15 | MIT/Apache-2.0 |
 | markup5ever | 0.38.0 | MIT OR Apache-2.0 |
 | memchr | 2.8.3 | Unlicense OR MIT |
 | memoffset | 0.9.1 | MIT |
@@ -498,7 +497,6 @@ Compilate dentro l'eseguibile dell'applicazione.
 | ndk | 0.9.0 | MIT OR Apache-2.0 |
 | ndk-sys | 0.6.0+11769913 | MIT OR Apache-2.0 |
 | new_debug_unreachable | 1.0.6 | MIT |
-| notify-rust | 4.18.0 | MIT OR Apache-2.0 |
 | ntapi | 0.4.3 | Apache-2.0 OR MIT |
 | num_enum | 0.7.6 | BSD-3-Clause OR MIT OR Apache-2.0 |
 | num_enum_derive | 0.7.6 | BSD-3-Clause OR MIT OR Apache-2.0 |
@@ -549,7 +547,6 @@ Compilate dentro l'eseguibile dell'applicazione.
 | polling | 3.11.0 | Apache-2.0 OR MIT |
 | potential_utf | 0.1.5 | Unicode-3.0 |
 | powerfmt | 0.2.0 | MIT OR Apache-2.0 |
-| ppv-lite86 | 0.2.21 | MIT OR Apache-2.0 |
 | precomputed-hash | 0.1.1 | MIT |
 | proc-macro-crate | 1.3.1 | MIT OR Apache-2.0 |
 | proc-macro-crate | 2.0.2 | MIT OR Apache-2.0 |
@@ -565,10 +562,7 @@ Compilate dentro l'eseguibile dell'applicazione.
 | r-efi | 5.3.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later |
 | r-efi | 6.0.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later |
 | rand | 0.10.2 | MIT OR Apache-2.0 |
-| rand | 0.9.5 | MIT OR Apache-2.0 |
-| rand_chacha | 0.9.0 | MIT OR Apache-2.0 |
 | rand_core | 0.10.1 | MIT OR Apache-2.0 |
-| rand_core | 0.9.5 | MIT OR Apache-2.0 |
 | rand_pcg | 0.10.2 | MIT OR Apache-2.0 |
 | raw-window-handle | 0.6.2 | MIT OR Apache-2.0 OR Zlib |
 | redox_syscall | 0.5.18 | MIT |
@@ -656,7 +650,6 @@ Compilate dentro l'eseguibile dell'applicazione.
 | tauri-plugin | 2.6.3 | Apache-2.0 OR MIT |
 | tauri-plugin-dialog | 2.7.2 | Apache-2.0 OR MIT |
 | tauri-plugin-fs | 2.5.1 | Apache-2.0 OR MIT |
-| tauri-plugin-notification | 2.3.3 | Apache-2.0 OR MIT |
 | tauri-plugin-process | 2.3.1 | Apache-2.0 OR MIT |
 | tauri-plugin-single-instance | 2.4.3 | Apache-2.0 OR MIT |
 | tauri-plugin-updater | 2.10.1 | Apache-2.0 OR MIT |
@@ -664,7 +657,6 @@ Compilate dentro l'eseguibile dell'applicazione.
 | tauri-runtime-wry | 2.11.4 | Apache-2.0 OR MIT |
 | tauri-utils | 2.9.3 | Apache-2.0 OR MIT |
 | tauri-winres | 0.3.6 | MIT |
-| tauri-winrt-notification | 0.7.3 | MIT OR Apache-2.0 |
 | tempfile | 3.27.0 | MIT OR Apache-2.0 |
 | tendril | 0.5.1 | MIT OR Apache-2.0 |
 | thiserror | 1.0.69 | MIT OR Apache-2.0 |
@@ -813,8 +805,6 @@ Compilate dentro l'eseguibile dell'applicazione.
 | zbus | 5.18.0 | MIT |
 | zbus_macros | 5.18.0 | MIT |
 | zbus_names | 4.3.4 | MIT |
-| zerocopy | 0.8.56 | BSD-2-Clause OR Apache-2.0 OR MIT |
-| zerocopy-derive | 0.8.56 | BSD-2-Clause OR Apache-2.0 OR MIT |
 | zerofrom | 0.1.8 | Unicode-3.0 |
 | zerofrom-derive | 0.1.7 | Unicode-3.0 |
 | zeroize | 1.9.0 | Apache-2.0 OR MIT |

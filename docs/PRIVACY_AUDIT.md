@@ -146,9 +146,9 @@ cat src-tauri/capabilities/default.json
 ```
 
 L'elenco è chiuso e contiene soltanto `core:default`, `dialog:allow-open`,
-`notification:default`, `updater:default` e `process:allow-restart`. Nessun
-permesso `http`, `shell` o `fs` generico: il frontend non ha il modo tecnico di
-emettere una richiesta di rete o di leggere un file arbitrario.
+`updater:default` e `process:allow-restart`. Nessun permesso `http`, `shell` o
+`fs` generico: il frontend non ha il modo tecnico di emettere una richiesta di
+rete o di leggere un file arbitrario.
 
 ### V6 — Nessun invio dal backend Python
 

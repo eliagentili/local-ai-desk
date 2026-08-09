@@ -3,7 +3,6 @@ mod commands;
 mod database;
 mod engine_bridge;
 mod models;
-mod notify;
 mod process;
 
 use std::{
@@ -115,7 +114,6 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
@@ -155,7 +153,6 @@ pub fn run() {
                 .resource_dir()
                 .map_err(|error| format!("Risorse dell’app non disponibili: {error}"))?;
             let state = AppState {
-                app: Some(app.handle().clone()),
                 database_path,
                 data_dir: data_dir.clone(),
                 results_dir,

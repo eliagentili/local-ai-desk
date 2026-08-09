@@ -70,9 +70,10 @@ con due voci spostate fuori perimetro.
 - retry di un lavoro non riuscito, con fonte in Libreria; **completato**;
 - cronologia eventi visibile; **completata nella 1.0**: dettaglio espandibile per
   lavoro in Attività, con fase, stato, messaggio e copia negli appunti;
-- notifiche native; **completate nella 1.0**: prima fallita del batch e riepilogo
-  a batch concluso, solo con la finestra non a fuoco. Non c'è ancora un
-  interruttore in Impostazioni;
+- notifiche native; **fuori dalla 1.0**: il plugin non faceva più partire il
+  binario di test su Windows (`STATUS_ENTRYPOINT_NOT_FOUND`), non verificabile
+  senza una macchina Windows, ed è stato rimosso dal codice; a batch concluso
+  l'esito si legge in Attività;
 - tetto di durata per lavoro; **completato nella 1.0**: dodici ore per default,
   configurabile, con risposta azionabile invece di un lavoro appeso per sempre;
 - pausa e riprendi; **fuori dalla 1.0**, rinviata a dopo la stabile;
@@ -174,8 +175,6 @@ evitare l'equivoco per cui «1.0» significa «tutto quello che c'è in roadmap�
 - primo avvio che porta da qualche parte: benvenuto, spazio richiesto e libero,
   fase dell'installazione, annullamento dell'installazione;
 - cronologia degli eventi di ogni lavoro, leggibile e copiabile;
-- notifiche di sistema a batch concluso e alla prima fallita, con finestra non a
-  fuoco;
 - aggiornamenti firmati Ed25519 con verifica prima dell'installazione;
 - tema chiaro e scuro con contrasto misurato in CI, alto contrasto di Windows
   gestito sui controlli, focus e annunci per screen reader;
@@ -199,7 +198,10 @@ rilascio, perché una funzione assente va detta prima del download.
 - rilevamento automatico della lingua di partenza di un PDF da tradurre;
 - eliminazione dei risultati dall'app e retention automatica;
 - scelta manuale fra PaddleOCR e GLM-OCR;
-- interruttore per le notifiche, concorrenza e retention in Impostazioni;
+- notifiche di sistema a batch concluso e alla prima fallita: rimosse dopo che
+  il plugin ha smesso di far partire il binario di test su Windows, non
+  verificabile senza una macchina Windows;
+- interruttore per la concorrenza e la retention in Impostazioni;
 - rimozione o riparazione del runtime dei motori dall'app;
 - canali Homebrew cask e winget;
 - attestazione di build provenance sugli artefatti;
