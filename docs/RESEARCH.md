@@ -1,8 +1,13 @@
 # Ricerca tecnica e scelte
 
-Aggiornata il 6 agosto 2026. Le scelte sono ipotesi tecniche da validare con un
-benchmark riproducibile sui dispositivi target; popolarità e numero di stelle non sono
-usati come sostituti di qualità, velocità o licenza.
+Aggiornata il 9 agosto 2026, per la 1.0. Le scelte sono ipotesi tecniche da
+validare con un benchmark riproducibile sui dispositivi target; popolarità e
+numero di stelle non sono usati come sostituti di qualità, velocità o licenza.
+
+**Nessun benchmark di quelli descritti qui è stato eseguito.** La 1.0 spedisce i
+motori scelti nella v1 e li dichiara come sono: le tabelle di questa pagina
+registrano le decisioni e il loro motivo, non misure. Il protocollo in fondo è ciò
+che serve prima di sostituire un motore.
 
 ## Shell desktop
 
@@ -11,9 +16,9 @@ usati come sostituti di qualità, velocità o licenza.
 Per una app locale non serve il runtime server di un framework web full-stack.
 Vite produce asset statici, mentre Tauri espone solo comandi nativi espliciti. Il
 sistema di [capabilities di Tauri](https://v2.tauri.app/security/capabilities/)
-permette di limitare ciò che ogni WebView può invocare. La Foundation concede
-solo il selettore file; rete, shell e filesystem generico non sono esposti alla
-UI.
+permette di limitare ciò che ogni WebView può invocare. La 1.0 concede una sola
+capability: selettore file, updater, riavvio e notifiche di sistema. Rete, shell e
+filesystem generico non sono esposti alla UI.
 
 ## Documenti
 
