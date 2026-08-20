@@ -1,7 +1,7 @@
-huggingface-hub==1.26.1
-numpy==2.3.5
+huggingface-hub==1.27.0
+numpy==2.5.2
 packaging==26.3
 torch==2.13.0
 safetensors==0.8.0
 tiktoken==0.13.0
-setuptools==83.0.0
+setuptools==84.0.0
