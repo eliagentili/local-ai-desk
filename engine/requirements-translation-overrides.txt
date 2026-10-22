@@ -1,6 +1,6 @@
 # Local AI Desk uses only the PDFMathTranslate programmatic core. The vulnerable
 # Gradio UI is removed after installation; these shared parsing/server packages
 # are kept on audited versions compatible with the core imports.
-fastapi==0.141.1
-starlette==1.3.1
-pillow==12.3.0
+fastapi==0.149.0
+starlette==1.9.0
+pillow==13.0.0
