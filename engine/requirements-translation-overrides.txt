@@ -3,4 +3,4 @@
 # are kept on audited versions compatible with the core imports.
 fastapi==0.141.1
 starlette==1.3.1
-pillow==12.3.0
+pillow==13.0.0
