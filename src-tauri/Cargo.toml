@@ -24,10 +24,10 @@ blake3 = "1.8.6"
 chrono = { version = "0.4", features = ["serde"] }
 futures-util = "0.3.33"
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "stream"] }
-rusqlite = { version = "0.40.1", features = ["bundled"] }
+rusqlite = { version = "0.41.1", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sysinfo = "0.39.6"
+sysinfo = "0.40.1"
 tauri = { version = "2.11.5", features = [] }
 tauri-plugin-dialog = "2.7.0"
 tauri-plugin-process = "2.3.1"
@@ -36,7 +36,7 @@ tauri-plugin-updater = "2.10.1"
 tokio = { version = "1.53.1", features = ["fs", "io-util", "macros", "sync", "time"] }
 tokio-util = { version = "0.7.19", features = ["io"] }
 uuid = { version = "1", features = ["v4"] }
-zip = { version = "8.6.0", default-features = false }
+zip = { version = "9.2.2", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
